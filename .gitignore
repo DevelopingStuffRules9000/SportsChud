@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.node/
+*.log
+
+# Not part of the app
+*.whl
+*.zip

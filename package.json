@@ -1,0 +1,34 @@
+{
+  "name": "sportschud",
+  "productName": "SportsChud",
+  "version": "0.3.4",
+  "description": "Live game alerts for NHL, MLB, NFL, NCAAF and NBA",
+  "author": "SportsChud",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.sportschud.app",
+    "productName": "SportsChud",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "preload.js", "engine.js", "leagues.js", "renderer/**/*", "assets/icon.ico", "assets/icon.png", "package.json"],
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [{ "target": "zip", "arch": ["x64"] }],
+      "signAndEditExecutable": false
+    },
+    "artifactName": "SportsChud-Windows.${ext}",
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "SportsChud-Setup.${ext}"
+    }
+  }
+}

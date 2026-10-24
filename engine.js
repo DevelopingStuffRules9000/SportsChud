@@ -1,0 +1,619 @@
+const { LEAGUES, scoreboardUrl, standingsUrl, rosterUrl, injuriesUrl, dayStr } = require('./leagues');
+
+const dayCache = new Map(); // `${league}:${YYYYMMDD}` -> { at, events }
+
+// Fetch one league's games for a list of days (one request per day, a few at a time).
+// Returns { events, errors }: a failing day is reported but never blocks the others.
+async function fetchDays(l, days, ttl = 0) {
+  const events = new Map();
+  const errors = [];
+  const queue = [...days];
+  const worker = async () => {
+    while (queue.length) {
+      const d = queue.shift();
+      const ck = `${l.key}:${d}`;
+      const hit = dayCache.get(ck);
+      let evs;
+      if (ttl && hit && Date.now() - hit.at < ttl) {
+        evs = hit.events;
+      } else {
+        try {
+          const res = await fetch(scoreboardUrl(l, d, 300));
+          if (!res.ok) throw new Error(`${l.name}: HTTP ${res.status}`);
+          evs = (await res.json()).events || [];
+          dayCache.set(ck, { at: Date.now(), events: evs });
+        } catch (err) {
+          errors.push(err.message);
+          continue;
+        }
+      }
+      for (const ev of evs) events.set(ev.id, ev);
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, worker));
+  return { events: [...events.values()], errors: [...new Set(errors)] };
+}
+
+function ord(n) {
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+// Turns ESPN's status block into a readable label plus a key that changes
+// whenever the game moves to a new period/inning/quarter/half.
+function periodInfo(kind, st) {
+  const state = st.type.state;
+  if (state === 'pre') return { label: 'Upcoming', key: 'pre' };
+  if (state === 'post') return { label: 'Final', key: 'post' };
+
+  const p = st.period || 1;
+  const name = st.type.name || '';
+  if (name === 'STATUS_HALFTIME') return { label: 'Halftime', key: 'half' };
+  if (name === 'STATUS_END_PERIOD') return { label: `End of ${ord(p)}`, key: `end${p}` };
+
+  switch (kind) {
+    case 'hockey':
+      if (p <= 3) return { label: `${ord(p)} Period`, key: `p${p}` };
+      if (p === 4) return { label: 'Overtime', key: 'ot' };
+      return { label: 'Shootout', key: 'so' };
+    case 'baseball': {
+      const d = st.type.shortDetail || `Inning ${p}`;
+      return { label: d, key: d };
+    }
+    case 'football':
+      if (p <= 4) return { label: `${ord(p)} Quarter`, key: `q${p}` };
+      return { label: 'Overtime', key: 'ot' };
+    case 'basketball':
+      if (p <= 4) return { label: `${ord(p)} Quarter`, key: `q${p}` };
+      return { label: p === 5 ? 'Overtime' : `${p - 4}OT`, key: `ot${p}` };
+    default:
+      return { label: `Period ${p}`, key: `p${p}` };
+  }
+}
+
+// ESPN's displayClock is "4:32" while a period has minutes left and "12.3" in the final minute
+function parseClock(s) {
+  if (!s) return null;
+  if (s.includes(':')) {
+    const [m, sec] = s.split(':').map(Number);
+    return Number.isFinite(m) && Number.isFinite(sec) ? m * 60 + sec : null;
+  }
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Past regulation: hockey 4th+ period, football/basketball 5th+, baseball beyond the 9th
+function isExtra(g) {
+  switch (g.kind) {
+    case 'hockey': return g.period >= 4;
+    case 'baseball': return g.period > 9;
+    case 'football':
+    case 'basketball': return g.period >= 5;
+    default: return false;
+  }
+}
+
+// "Close game" = late in regulation and within a one-possession margin. Extra frames are
+// covered by the Overtime alert instead, and break frames (end of period) are skipped.
+const CLOSE_RULES = {
+  hockey:     { period: (p) => p === 3, maxClock: 600, margin: 1 },  // 3rd period, last 10:00, within a goal
+  basketball: { period: (p) => p === 4, maxClock: 300, margin: 5 },  // 4th quarter, last 5:00, within 5
+  football:   { period: (p) => p === 4, maxClock: 300, margin: 8 },  // 4th quarter, last 5:00, within a score
+  baseball:   { period: (p) => p === 8 || p === 9, maxClock: null, margin: 1 } // 8th/9th, within a run
+};
+
+function isCloseLate(g) {
+  const r = CLOSE_RULES[g.kind];
+  if (!r || g.state !== 'in' || g.isBreak || !r.period(g.period)) return false;
+  if (Math.abs(g.home.score - g.away.score) > r.margin) return false;
+  if (r.maxClock == null) return true;
+  return g.clockSec != null && g.clockSec <= r.maxClock;
+}
+
+// First https URL found anywhere inside a value (ESPN's highlight objects vary in shape)
+function firstUrl(v, depth = 0) {
+  if (!v || depth > 6) return '';
+  if (typeof v === 'string') return /^https:\/\//.test(v) ? v : '';
+  if (Array.isArray(v)) { for (const x of v) { const u = firstUrl(x, depth + 1); if (u) return u; } return ''; }
+  if (typeof v === 'object') {
+    if (typeof v.href === 'string' && /^https:\/\//.test(v.href)) return v.href;
+    for (const k of Object.keys(v)) { const u = firstUrl(v[k], depth + 1); if (u) return u; }
+  }
+  return '';
+}
+
+// ESPN highlight objects list a thumbnail (.jpg) before their links, so a blind "first URL"
+// picks the image. Use the watch page explicitly, or build it from the clip id.
+const isHttps = (u) => typeof u === 'string' && /^https:\/\//.test(u);
+const isMedia = (u) => /\.(jpe?g|png|gif|webp|mp4|m3u8|mpd)(\?|$)/i.test(u);
+function highlightUrl(list) {
+  for (const h of Array.isArray(list) ? list : []) {
+    if (!h || typeof h !== 'object') continue;
+    const web = h.links && h.links.web;
+    const cands = [web && web.href, web && web.self && web.self.href, web && web.seo && web.seo.href];
+    const page = cands.find((u) => isHttps(u) && !isMedia(u));
+    if (page) return page;
+    if (h.id && /^\d+$/.test(String(h.id))) return `https://www.espn.com/video/clip/_/id/${h.id}`;
+  }
+  return '';
+}
+
+function parseEvent(l, ev) {
+  const comp = ev.competitions && ev.competitions[0];
+  if (!comp) return null;
+  const st = ev.status || comp.status;
+  const home = comp.competitors.find((c) => c.homeAway === 'home');
+  const away = comp.competitors.find((c) => c.homeAway === 'away');
+  if (!home || !away || !st) return null;
+  const side = (c) => ({
+    id: String(c.team.id),
+    name: c.team.displayName,
+    nick: c.team.name || '',
+    abbr: c.team.abbreviation,
+    logo: c.team.logo || (c.team.logos && c.team.logos[0] && c.team.logos[0].href) || '',
+    color: c.team.color ? '#' + c.team.color : null,
+    score: Number(c.score || 0)
+  });
+  const { label, key } = periodInfo(l.kind, st);
+  return {
+    id: `${l.key}:${ev.id}`,
+    league: l.key,
+    leagueName: l.name,
+    icon: l.icon,
+    kind: l.kind,
+    date: ev.date,
+    state: st.type.state, // pre | in | post
+    label,
+    key,
+    clock: st.displayClock || '',
+    clockSec: parseClock(st.displayClock),
+    period: st.period || 0,
+    isBreak: st.type.name === 'STATUS_END_PERIOD' || st.type.name === 'STATUS_HALFTIME',
+    detail: st.type.shortDetail || '',
+    home: side(home),
+    away: side(away),
+    link: firstUrl((ev.links || []).filter((x) => (x.rel || []).includes('summary'))) || firstUrl(ev.links),
+    highlight: highlightUrl(comp.highlights),
+    broadcast: [...new Set((comp.broadcasts || []).flatMap((b) => b.names || []))].join(', ')
+  };
+}
+
+/* ---------- Standings ---------- */
+const standCache = new Map(); // league key -> { at, data }
+
+// ESPN nests teams as children (conference > division). Every node that has standings.entries becomes a table.
+function parseStandings(l, data) {
+  const groups = [];
+  let season = '';
+  const walk = (node) => {
+    if (!node || typeof node !== 'object') return;
+    const st = node.standings;
+    if (st && Array.isArray(st.entries) && st.entries.length) {
+      if (!season) season = st.seasonDisplayName || '';
+      const rows = st.entries.map((e) => {
+        const t = e.team || {};
+        const stats = {};
+        let sort = null, seed = 0, clincher = '';
+        for (const s of e.stats || []) {
+          const val = s.summary != null ? s.summary : s.displayValue;
+          if (s.name) stats[s.name] = val;
+          if (s.type === 'lasttengames') stats.lasttengames = val;
+          if (s.name === l.sortStat && typeof s.value === 'number') sort = s.value;
+          if (s.name === 'playoffSeed') seed = Number(s.value) || 0;
+          if (s.name === 'clincher' && s.displayValue && s.displayValue !== '-' && s.displayValue.length <= 3) clincher = s.displayValue;
+        }
+        return {
+          teamId: String(t.id),
+          name: t.displayName || t.name || '',
+          abbr: t.abbreviation || '',
+          logo: (t.logos && t.logos[0] && t.logos[0].href) || t.logo || '',
+          stats, sort, seed, clincher
+        };
+      });
+      // Prefer ESPN's seeds when every team has one, otherwise rank by the league's main stat
+      if (rows.every((r) => r.seed > 0)) rows.sort((a, b) => a.seed - b.seed);
+      else if (rows.every((r) => r.sort != null)) rows.sort((a, b) => b.sort - a.sort);
+      groups.push({ name: node.name || node.abbreviation || '', rows });
+    }
+    for (const c of node.children || []) walk(c);
+  };
+  walk(data);
+  return { season, groups };
+}
+
+async function fetchStandings(l, ttl = 300000) {
+  const hit = standCache.get(l.key);
+  if (hit && Date.now() - hit.at < ttl) return hit.data;
+  const res = await fetch(standingsUrl(l));
+  if (!res.ok) throw new Error(`${l.name} standings: HTTP ${res.status}`);
+  const data = parseStandings(l, await res.json());
+  if (!data.groups.length) throw new Error(`${l.name} standings: no data returned`);
+  standCache.set(l.key, { at: Date.now(), data });
+  return data;
+}
+
+/* ---------- Playoffs ---------- */
+const postCache = new Map(); // league key -> { at, on }
+const seasonType = (v) => (v && typeof v === 'object' ? Number(v.type) : Number(v));
+
+// Cheap check: is this league in its postseason today? One request, cached for 10 minutes.
+async function isPostseason(l, ttl = 600000) {
+  const hit = postCache.get(l.key);
+  if (hit && Date.now() - hit.at < ttl) return hit.on;
+  let on = hit ? hit.on : false; // keep the last answer if the network hiccups
+  try {
+    const res = await fetch(scoreboardUrl(l, dayStr(new Date()), 50));
+    if (res.ok) {
+      const j = await res.json();
+      const top = seasonType(j.season && j.season.type);
+      const lg = seasonType(j.leagues && j.leagues[0] && j.leagues[0].season && j.leagues[0].season.type);
+      on = top === 3 || lg === 3 || (j.events || []).some((ev) => ev.season && ev.season.type === 3);
+    }
+  } catch (_) {}
+  postCache.set(l.key, { at: Date.now(), on });
+  return on;
+}
+
+// Builds the series (or single games, e.g. NFL) from postseason scoreboard events. ESPN attaches the
+// running series score to every playoff event, so no separate bracket feed is needed.
+async function fetchPlayoffs(l) {
+  const now = new Date();
+  const days = [];
+  for (let i = -14; i <= 2; i++) days.push(dayStr(new Date(now.getFullYear(), now.getMonth(), now.getDate() + i)));
+  const { events, errors } = await fetchDays(l, days, 300000);
+
+  const groups = new Map();
+  for (const ev of events) {
+    if (!ev.season || ev.season.type !== 3) continue;
+    const g = parseEvent(l, ev);
+    if (!g) continue;
+    const comp = ev.competitions[0];
+    const note = ((comp.notes || []).map((n) => n.headline).find(Boolean)) || '';
+    const round = note.replace(/\s*[-–]\s*Game\s*\d+.*$/i, '').trim() || 'Playoffs';
+    const gm = note.match(/Game\s*(\d+)/i);
+    const sr = comp.series && comp.series.type === 'playoff' ? comp.series : null;
+    const wins = {};
+    if (sr) for (const c of sr.competitors || []) wins[String(c.id)] = Number(c.wins) || 0;
+    const key = sr ? [g.home.id, g.away.id].sort().join('-') : g.id;
+    if (!groups.has(key)) groups.set(key, { sr: !!sr, games: [] });
+    groups.get(key).games.push({ g, round, gameNo: gm ? Number(gm[1]) : null, wins, summary: sr ? sr.summary || '' : '', completed: !!(sr && sr.completed), bestOf: sr ? Number(sr.totalCompetitions) || 0 : 1 });
+  }
+
+  const out = [];
+  for (const [key, grp] of groups) {
+    const games = grp.games.sort((a, b) => new Date(a.g.date) - new Date(b.g.date));
+    const first = games[0].g;
+    // The event with the most series wins carries the newest series state
+    const total = (x) => Object.values(x.wins).reduce((s, n) => s + n, 0);
+    const latest = games.reduce((best, x) => (total(x) >= total(best) ? x : best), games[0]);
+    const lastGame = games[games.length - 1];
+    const liveGame = games.find((x) => x.g.state === 'in');
+    const nextGame = games.find((x) => x.g.state === 'pre');
+    const need = latest.bestOf ? Math.ceil(latest.bestOf / 2) : 0;
+    const teamsRaw = [first.home, first.away]; // higher seed hosts game 1
+    const completed = grp.sr
+      ? latest.completed || (need > 0 && teamsRaw.some((t) => (latest.wins[t.id] || 0) >= need))
+      : lastGame.g.state === 'post';
+    const cur = liveGame || lastGame;
+    const scoreOf = (id) => (cur.g.home.id === id ? cur.g.home.score : cur.g.away.score);
+    out.push({
+      id: key,
+      league: l.key,
+      leagueName: l.name,
+      icon: l.icon,
+      round: latest.round,
+      single: !grp.sr,
+      bestOf: latest.bestOf,
+      teams: teamsRaw.map((t) => ({ id: t.id, name: t.name, abbr: t.abbr, logo: t.logo, color: t.color, wins: latest.wins[t.id] || 0, score: scoreOf(t.id) })),
+      summary: latest.summary,
+      completed,
+      live: liveGame ? { label: liveGame.g.label, clock: liveGame.g.kind === 'baseball' ? '' : liveGame.g.clock, gameNo: liveGame.gameNo } : null,
+      next: !completed && nextGame ? { date: nextGame.g.date, gameNo: nextGame.gameNo } : null,
+      state: cur.g.state,
+      lastDate: lastGame.g.date
+    });
+  }
+  // Drop series that finished a while ago; keep the freshest results on screen
+  const cutoff = Date.now() - 4 * 86400000;
+  const kept = out.filter((s) => !s.completed || new Date(s.lastDate).getTime() >= cutoff);
+  return { series: kept, errors };
+}
+
+// Is any followed team still alive in these series? Alive = in a series that isn't over, or won the one
+// that just ended (the next round may not be on the scoreboard yet). Eliminated or absent teams don't count.
+function followedAlive(series, ids) {
+  for (const s of series) {
+    if (!s.teams.some((t) => ids.has(t.id))) continue;
+    if (!s.completed) return true;
+    const val = (t) => (s.single ? t.score : t.wins);
+    const [a, b] = s.teams;
+    const winner = val(a) === val(b) ? null : val(a) > val(b) ? a : b;
+    if (winner && ids.has(winner.id)) return true;
+  }
+  return false;
+}
+
+/* ---------- Season status ---------- */
+const seasonCache = new Map(); // league key -> { at, on }
+
+// A league counts as in season when it has games from 2 days ago to 10 days ahead (covers preseason,
+// regular season and postseason without relying on ESPN's season metadata). Cached for 3 hours.
+// If ESPN can't be reached the last answer is kept, and with no answer yet the league counts as in season,
+// so a network problem never hides a sport.
+async function isInSeason(l, ttl = 3 * 3600000) {
+  const hit = seasonCache.get(l.key);
+  if (hit && Date.now() - hit.at < ttl) return hit.on;
+  const now = new Date();
+  const days = [];
+  for (let i = -2; i <= 10; i++) days.push(dayStr(new Date(now.getFullYear(), now.getMonth(), now.getDate() + i)));
+  const { events, errors } = await fetchDays(l, days, ttl);
+  let on;
+  if (events.length) on = true;
+  else if (errors.length) on = hit ? hit.on : true; // unknown: don't hide
+  else on = false;
+  seasonCache.set(l.key, { at: Date.now(), on });
+  return on;
+}
+
+/* ---------- Rosters ---------- */
+const rosterCache = new Map(); // `${league}:${teamId}` -> { at, data }
+
+const playerCard = (a) => {
+  const l = (a.links || []).find((x) => (x.rel || []).includes('playercard')) || (a.links || [])[0];
+  return l && /^https:\/\//.test(l.href || '') ? l.href : '';
+};
+const prettyGroup = (s) =>
+  String(s || 'Roster').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase());
+
+function parseRoster(data) {
+  const raw = Array.isArray(data.athletes) ? data.athletes : [];
+  const mapAthlete = (a) => ({
+    id: String(a.id),
+    name: a.displayName || a.fullName || '',
+    jersey: a.jersey != null ? String(a.jersey) : '',
+    pos: (a.position && a.position.abbreviation) || '',
+    age: a.age != null ? a.age : '',
+    height: a.displayHeight || '',
+    weight: a.displayWeight || '',
+    exp: a.experience && a.experience.years != null ? a.experience.years : '',
+    headshot: (a.headshot && a.headshot.href) || '',
+    injury: (a.injuries && a.injuries[0] && (a.injuries[0].status || 'Injured')) || '',
+    link: playerCard(a)
+  });
+  const byJersey = (x, y) => (parseInt(x.jersey, 10) || 999) - (parseInt(y.jersey, 10) || 999) || x.name.localeCompare(y.name);
+
+  const groups = [];
+  if (raw.length && raw.every((g) => g && Array.isArray(g.items))) {
+    // Grouped by unit (NHL, NFL, MLB)
+    for (const g of raw) if (g.items.length) groups.push({ title: prettyGroup(g.position), players: g.items.map(mapAthlete).sort(byJersey) });
+  } else {
+    // Flat list (NBA): group by position
+    const map = new Map();
+    for (const a of raw) {
+      const p = mapAthlete(a);
+      const title = prettyGroup((a.position && (a.position.displayName || a.position.name)) || 'Roster');
+      if (!map.has(title)) map.set(title, []);
+      map.get(title).push(p);
+    }
+    for (const [title, players] of map) groups.push({ title, players: players.sort(byJersey) });
+  }
+  const coachRaw = Array.isArray(data.coach) ? data.coach[0] : null;
+  const coach = coachRaw ? `${coachRaw.firstName || ''} ${coachRaw.lastName || ''}`.trim() : '';
+  return { coach, count: groups.reduce((n, g) => n + g.players.length, 0), groups };
+}
+
+async function fetchRoster(l, teamId, ttl = 600000) {
+  const ck = `${l.key}:${teamId}`;
+  const hit = rosterCache.get(ck);
+  if (hit && Date.now() - hit.at < ttl) return hit.data;
+  const res = await fetch(rosterUrl(l, teamId));
+  if (!res.ok) throw new Error(`${l.name} roster: HTTP ${res.status}`);
+  const data = parseRoster(await res.json());
+  if (!data.count) throw new Error(`${l.name} roster: no players returned`);
+  rosterCache.set(ck, { at: Date.now(), data });
+  return data;
+}
+
+/* ---------- Injuries ---------- */
+const injCache = new Map(); // league key -> { at, data }
+
+function parseInjuries(l, data) {
+  const teams = [];
+  for (const t of data.injuries || []) {
+    const items = (t.injuries || []).map((i) => {
+      const a = i.athlete || {};
+      const d = i.details || {};
+      return {
+        id: String(i.id),
+        name: a.displayName || [a.firstName, a.lastName].filter(Boolean).join(' '),
+        pos: (a.position && a.position.abbreviation) || '',
+        headshot: (a.headshot && a.headshot.href) || '',
+        status: i.status || (i.type && i.type.description) || 'Unknown',
+        kind: [d.side, d.type].filter(Boolean).join(' '),
+        returnDate: d.returnDate || '',
+        date: i.date || '',
+        comment: i.shortComment || '',
+        link: playerCard(a)
+      };
+    }).sort((x, y) => new Date(y.date) - new Date(x.date));
+    if (!items.length) continue;
+    const at = (t.injuries.find((i) => i.athlete && i.athlete.team) || {}).athlete;
+    const team = (at && at.team) || {};
+    const abbr = team.abbreviation || '';
+    teams.push({
+      teamId: String(t.id),
+      name: t.displayName || team.displayName || '',
+      abbr,
+      logo: (team.logos && team.logos[0] && team.logos[0].href) || (abbr ? `https://a.espncdn.com/i/teamlogos/${l.league}/500/${abbr.toLowerCase()}.png` : ''),
+      items
+    });
+  }
+  teams.sort((a, b) => a.name.localeCompare(b.name));
+  return { teams, total: teams.reduce((n, t) => n + t.items.length, 0) };
+}
+
+async function fetchInjuries(l, ttl = 300000) {
+  const hit = injCache.get(l.key);
+  if (hit && Date.now() - hit.at < ttl) return hit.data;
+  const res = await fetch(injuriesUrl(l));
+  if (!res.ok) throw new Error(`${l.name} injuries: HTTP ${res.status}`);
+  const data = parseInjuries(l, await res.json());
+  injCache.set(l.key, { at: Date.now(), data });
+  return data;
+}
+
+class Engine {
+  constructor({ getSettings, notify, onUpdate }) {
+    this.getSettings = getSettings;
+    this.notify = notify;
+    this.onUpdate = onUpdate;
+    this.prev = new Map();
+    this.reminded = new Set();
+    this.closeSent = new Set();
+    this.games = [];
+    this.timer = null;
+  }
+
+  start() {
+    this.tick();
+  }
+
+  stop() {
+    clearTimeout(this.timer);
+  }
+
+  async tick() {
+    clearTimeout(this.timer);
+    const settings = this.getSettings();
+    const leagueKeys = [...new Set(settings.follows.map((f) => f.league))];
+    const now = new Date();
+    // While a game is live only yesterday-to-tomorrow needs the fast poll; otherwise look a week ahead
+    const span = this.anyLive ? 1 : 7;
+    const days = [];
+    for (let i = -1; i <= span; i++) days.push(dayStr(new Date(now.getFullYear(), now.getMonth(), now.getDate() + i)));
+    const games = [];
+    const seen = new Set();
+
+    await Promise.all(
+      leagueKeys.map(async (key) => {
+        const l = LEAGUES.find((x) => x.key === key);
+        if (!l) return;
+        const { events, errors } = await fetchDays(l, days);
+        if (errors.length) console.error(`[engine] ${key}:`, errors.join('; '));
+        for (const ev of events) {
+          const g = parseEvent(l, ev);
+          if (!g || seen.has(g.id)) continue;
+          const followed = this.followedIn(settings, g);
+          if (!followed.length) continue;
+          seen.add(g.id);
+          this.process(g, followed, settings);
+          games.push(g);
+        }
+      })
+    );
+
+    this.games = games;
+    this.onUpdate(games);
+    const anyLive = games.some((g) => g.state === 'in');
+    this.anyLive = anyLive;
+    this.timer = setTimeout(() => this.tick(), anyLive ? 15000 : 60000);
+  }
+
+  followedIn(settings, g) {
+    return settings.follows.filter(
+      (f) => f.league === g.league && (f.teamId === g.home.id || f.teamId === g.away.id)
+    );
+  }
+
+  wants(followed, type) {
+    return followed.some((f) => f.alerts && f.alerts[type]);
+  }
+
+  process(g, followed, settings) {
+    const prev = this.prev.get(g.id);
+    this.prev.set(g.id, { state: g.state, key: g.key, period: g.period, home: g.home.score, away: g.away.score });
+    const matchup = `${g.away.name} at ${g.home.name}`;
+    const scoreLine = `${g.away.abbr} ${g.away.score} – ${g.home.score} ${g.home.abbr}`;
+
+    // Reminder before start
+    if (g.state === 'pre' && this.wants(followed, 'reminder')) {
+      const mins = (new Date(g.date) - Date.now()) / 60000;
+      if (mins > 0 && mins <= settings.reminderMinutes && !this.reminded.has(g.id)) {
+        this.reminded.add(g.id);
+        this.notify({ title: `Starting in ${Math.ceil(mins)} min`, body: matchup, gameId: g.id });
+      }
+    }
+
+    // Close game, late: once per game, the first time it qualifies
+    if (g.state === 'post') this.closeSent.delete(g.id);
+    else if (!this.closeSent.has(g.id) && this.wants(followed, 'close') && isCloseLate(g)) {
+      this.closeSent.add(g.id);
+      const tied = g.home.score === g.away.score;
+      const when = `${g.label}${g.clock && g.kind !== 'baseball' ? ' ' + g.clock : ''}`;
+      this.notify({
+        title: `${g.icon} ${tied ? 'Tied late' : 'Close game'}`,
+        body: `${scoreLine} · ${when}`,
+        gameId: g.id
+      });
+    }
+
+    if (!prev) return; // first sighting: don't fire retroactive alerts
+
+    // Game start
+    if (prev.state === 'pre' && g.state === 'in' && this.wants(followed, 'start')) {
+      this.notify({ title: `${g.icon} Game on!`, body: matchup, gameId: g.id });
+    }
+
+    if (prev.state === 'in' || (prev.state === 'pre' && g.state === 'in')) {
+      // Scoring
+      const dHome = g.home.score - prev.home;
+      const dAway = g.away.score - prev.away;
+      // Basketball scores every few seconds, so it gets period-by-period updates instead
+      if ((dHome > 0 || dAway > 0) && g.kind !== 'basketball' && this.wants(followed, 'score')) {
+        const scorer = dHome > 0 ? g.home : g.away;
+        const diff = dHome > 0 ? dHome : dAway;
+        const word =
+          g.kind === 'baseball' ? (diff > 1 ? `${diff} runs score` : 'Run scores')
+          : g.kind === 'football' ? `+${diff} points`
+          : 'GOAL!'; // hockey
+        this.notify({
+          title: `${word} ${scorer.name}`,
+          body: `${scoreLine} · ${g.label}${g.state === 'in' && g.kind === 'hockey' ? ' ' + g.clock : ''}`.trim(),
+          gameId: g.id
+        });
+      }
+
+      // Overtime / extra innings / shootout: fires when a game first enters each extra frame
+      let otFired = false;
+      if (g.state === 'in' && prev.state === 'in' && !g.isBreak && isExtra(g) && g.period > (prev.period || 0) && this.wants(followed, 'overtime')) {
+        otFired = true;
+        this.notify({
+          title: g.kind === 'baseball' ? `${g.icon} Extra innings!` : `${g.icon} ${g.label}!`,
+          body: `${scoreLine} · ${g.leagueName}`,
+          gameId: g.id
+        });
+      }
+
+      // Period / inning / quarter / half changes
+      if (g.state === 'in' && prev.state === 'in' && prev.key !== g.key && !otFired && this.wants(followed, 'period')) {
+        const isEnd = g.key.startsWith('end') || g.key === 'half';
+        const skipBaseball = g.kind === 'baseball' && !/^(Top|Bot)/.test(g.label);
+        if (!skipBaseball) {
+          this.notify({
+            title: isEnd ? g.label : `${g.label} underway`,
+            body: `${scoreLine} · ${g.leagueName}`,
+            gameId: g.id
+          });
+        }
+      }
+
+      // Final
+      if (g.state === 'post' && this.wants(followed, 'final')) {
+        this.notify({ title: `Final · ${g.icon}`, body: scoreLine, gameId: g.id });
+      }
+    }
+  }
+}
+
+module.exports = { Engine, parseEvent, periodInfo, fetchDays, fetchStandings, isPostseason, fetchPlayoffs, followedAlive, isInSeason, fetchRoster, fetchInjuries, parseRoster, parseInjuries };

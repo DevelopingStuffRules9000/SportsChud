@@ -1,0 +1,47 @@
+# SportsChud
+
+Windows desktop app (Electron 33, plain JS, no bundler/framework) that sends live game alerts for NHL, MLB, NFL, NCAA football (FBS) and NBA. Data comes from ESPN's unofficial public scoreboard API. See `README.md` for the user-facing description.
+
+## Commands
+- `npm install` then `npm start` runs the app (`electron .`).
+- `Setup-SportsChud.bat` installs Node (winget, with a direct nodejs.org download as fallback) if missing or older than 18, then runs `npm install` if Electron is missing. `Setup-SportsChud.bat repair` wipes `node_modules` and reinstalls; `auto` skips the pauses.
+- `Start-SportsChud.bat` is the end-user launcher: if `node_modules\electron\dist\electron.exe` exists it just starts it, otherwise it calls Setup first.
+- `npm run dist` builds a Windows zip with electron-builder. CI (`.github/workflows/build.yml`) builds an NSIS installer on `windows-latest`.
+- There are no tests or linter. Sanity check JS with `node --check <file>`.
+- Target platform is Windows. Develop/edit anywhere, but tray, taskbar, shortcut and toast behavior can only be verified on Windows.
+
+## Layout
+- `main.js`: Electron main process. Window, tray, single-instance lock, settings, desktop shortcut, taskbar details, login item, IPC handlers, notifications.
+- `engine.js`: polls ESPN (15s when a game is live, 60s otherwise), diffs game state, calls `notify` on changes. Close-game thresholds live in `CLOSE_RULES`; `isExtra` defines what counts as overtime per sport (NCAAF reuses the `football` rules). Close-game alerts also fire on first sighting (app opened mid-game), once per game via `closeSent`. Also `fetchDays` (one request per day, ESPN rejects ranges) and `parseEvent`.
+- `leagues.js`: league definitions and ESPN URL builders. Add a league by adding an entry here, including its `cols`, `sortStat` and optional `standingsLevel` for the Standings table. Standings use `/apis/v2/...` (not `/apis/site/v2`). Optional per-league fields: `scoreboardQuery` / `teamsQuery` (NCAAF passes `&groups=80` so ESPN returns all FBS games and teams, not just the Top 25) and `noInjuries` (league is left off the Injuries tab).
+- Roster and Injuries: `fetchRoster` / `fetchInjuries` in `engine.js` (IPC `roster`, `injuries`), cached 10 and 5 minutes. ESPN rosters come grouped by unit (NHL/NFL/MLB) or as a flat list (NBA); `parseRoster` handles both. The injuries feed is league-wide and has no team logos, so `parseInjuries` takes the logo from the athlete's team or falls back to ESPN's logo CDN.
+- Standings and Playoffs: `fetchStandings`, `isPostseason` and `fetchPlayoffs` in `engine.js`, exposed through the `standings`, `playoffs:status` and `playoffs` IPC channels. Playoffs has no bracket feed: series are rebuilt from postseason (`season.type === 3`) scoreboard events, whose `competitions[0].series` carries the running series score. The Playoffs tab is hidden unless `playoffs:status` says a followed team is alive (`followedAlive` in `engine.js`: in an unfinished series, or won the one that just ended) or the `playoffsAutoHide` setting is off. With autohide on, the Playoffs view only lists leagues with a live followed team. Status is refreshed every 30 min and whenever teams are followed or unfollowed.
+- Season status: `isInSeason` in `engine.js` (IPC `seasons:status`) says a league is in season when it has games from 2 days ago to 10 days ahead (cached 3 h; on network errors it keeps the last answer or assumes in season). The `hideOffSeason` setting (labelled "Autohide out of season sports" in Settings, default off) makes `visibleLeagues()` in `renderer.js` drop out-of-season leagues from the Teams, Standings, Injuries and Roster pickers. `visibleLeagues(extra, followedOnly)` also drops leagues with no followed team when `followedOnly` is true (Standings, Injuries, Roster); the Teams picker passes false so a first team can be added. If a filter would leave nothing, the season filter falls back to the unfiltered list, and Standings/Injuries show a "Pick your teams" state when no league is followed. It never affects the engine or alerts, and Teams > Following always lists every followed team.
+- UI conventions: every pill group lives in the header via `setActions(opts, current, onPick, picker)` in `renderer.js` (the `#hact` slot, cleared on each `render()`), on the same line as the title. Layout is pills on the left (league/team `picker` first, then a `|` divider, then the option pills), blue `.sub` text, a `|`, then the title on the right. Option pills: Scores/Recaps `By team`/`By status`, Injuries scope, Schedules Day/Week/Month. Pickers: league (Teams, Standings, Injuries) or team (Roster). Don't put pill rows inside `#view`. Recaps shows the last `RECAP_GAMES` (3) finals per followed team, searching back `RECAP_LOOKBACK_DAYS` (35). Scores and Recaps group by followed team by default (`groupBy` setting, defaults in two places in `main.js`).
+- Versioning: `package.json` `version` is the app version (shown in Settings via IPC `app:version`). **Any feature added is a version change**: bump `version` in the same change that adds it (new feature = minor bump, e.g. 0.2.2 to 0.3.0; bug fix or tweak with no new feature = patch bump). Name the release zip `SportsChud-vX_Y_Z.zip` (e.g. `SportsChud-v0_3_0.zip`), and mention new features in `README.md`. `package-lock.json` is regenerated by `npm install`, not edited by hand.
+- `preload.js`: `contextBridge` API exposed as `window.api`. Every IPC channel used by the renderer must be listed here.
+- The Activity tab is hidden from the sidebar until the first alert of the session (`navVisible` / `activityVisible` in `renderer.js`); it appears when the first `activity` event arrives. The `activityAutoHide` setting (default on) controls this: when off, the tab is always shown.
+- Autohide settings: every autohide option has a switch under the "Autohide" heading in Settings (`renderSettings` in `renderer.js`): `playoffsAutoHide` (default on), `activityAutoHide` (default on) and `hideOffSeason` (default off). When you add a new autohide behavior, add its switch to the `autohide` list there. Settings that default to on are listed in `DEFAULT_ON` in `renderer.js` (a missing key counts as on) and must also be set in both default places in `main.js`.
+- `renderer/`: `index.html`, `renderer.js` (all views: Scores, Schedule, Teams, Activity, Recaps, Settings), `styles.css`, `icon.png` (sidebar logo).
+- `assets/`: `icon.png` (source) and `icon.ico` (rendered from it, used for the exe/taskbar/shortcut).
+- The `.whl` files in the root (numpy, potracer) were used to render the icon and are not part of the app. They are not in the electron-builder `files` list.
+
+## Settings and storage
+- Settings live in `settings.json` in Electron's `userData` folder (`%APPDATA%\SportsChud`). Defaults are defined in `main.js` in two places (the `settings` initializer and the `app:reset` handler). Keep them in sync when adding a setting. New per-team alert types go in `DEFAULT_ALERTS` (`main.js`) and `ALERT_TYPES` (`renderer.js`); `loadSettings` backfills them onto already-saved teams.
+- `loadSettings` also reads the legacy `%APPDATA%\Gametime\settings.json` from before the rename.
+- `SportsChud.log` in the same folder is a small diagnostic log (single-instance and second-launch events).
+
+## Window, tray and taskbar behavior (the fiddly part)
+- `keepInTray` (default true): closing the window calls `win.hide()` instead of quitting. The app keeps running and polling from the tray icon. Quit via the tray menu. When `keepInTray` is false, closing quits.
+- A hidden window has no taskbar button on Windows. The only ways back are the tray icon, a notification click, or launching the app again.
+- Launching again is caught by `requestSingleInstanceLock` + the `second-instance` event, which calls `showWindow()`. This is how the pinned taskbar icon and the desktop shortcut reveal a hidden window. The second process just quits.
+- Always bring the window back with `showWindow()`, never ad hoc `win.show()`. It restores, shows, and force-focuses (Windows may otherwise leave a background window unfocused).
+- Taskbar identity: AppUserModelID is `com.sportschud.app` (`APP_ID`). It is set on the process, the window (`setAppDetails`, with `relaunchCommand`) and the desktop shortcut so pinning shows the SportsChud icon and relaunches the right thing. Explorer can't read icons from inside `app.asar`, so `stableIcon()` copies `icon.ico` into `userData` and points at that.
+- The desktop shortcut is created once (flag file `.desktop-shortcut`), refreshed on every start if it exists, and never recreated if the user deleted it.
+- `--hidden` + `startSilently` starts with the window hidden (login item). `createWindow(true)` overrides that when something explicitly asks for the window.
+
+## Conventions
+- Keep ESPN access inside `leagues.js` and `engine.js`. The feed is undocumented and may change.
+- Renderer has no Node access: `contextIsolation` is on and the CSP in `index.html` only allows `self` scripts. New main-process features go through `preload.js` + `ipcMain.handle`.
+- Keep dependencies minimal. The app uses no runtime npm packages, only Electron and electron-builder as dev dependencies.
+- Don't edit `package-lock.json` by hand.
