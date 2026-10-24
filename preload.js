@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld('api', {
   openLink: (url) => ipcRenderer.invoke('open:link', url),
   resetApp: () => ipcRenderer.invoke('app:reset'),
   testNotification: () => ipcRenderer.invoke('notify:test'),
+  updateState: () => ipcRenderer.invoke('update:state'),
+  checkUpdate: () => ipcRenderer.invoke('update:check'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  onUpdate: (cb) => ipcRenderer.on('update:state', (_, u) => cb(u)),
   onGames: (cb) => ipcRenderer.on('games:update', (_, g) => cb(g)),
   onActivity: (cb) => ipcRenderer.on('activity', (_, a) => cb(a))
 });

@@ -794,7 +794,40 @@ async function renderInjuries() {
 
 /* ---------- Settings view ---------- */
 // Settings that are on unless explicitly saved as false (keep in sync with the defaults in main.js)
-const DEFAULT_ON = ['keepInTray', 'playoffsAutoHide', 'activityAutoHide'];
+const DEFAULT_ON = ['keepInTray', 'playoffsAutoHide', 'activityAutoHide', 'checkForUpdates'];
+
+// Update banner (under the header) and the Updates row in Settings. state.update comes from main (updater.js).
+function renderUpdBar() {
+  const bar = $('#updbar');
+  const u = state.update;
+  const show = !!(u && u.supported && u.available);
+  bar.hidden = !show;
+  if (show) bar.textContent = u.downloading ? `Downloading SportsChud v${u.version}… ${u.progress}%` : `SportsChud v${u.version} is available. Click to open Settings and install it.`;
+}
+function updateRow() {
+  const u = state.update;
+  if (!u) return '';
+  let desc;
+  let btn = '';
+  if (!u.supported) {
+    desc = 'Updates work in the installed version of SportsChud. This copy is running from source.';
+  } else if (u.downloading) {
+    desc = `Downloading v${esc(u.version)}… ${u.progress}%. SportsChud will close and open the installer when it finishes.`;
+    btn = '<button class="ubtn" disabled>Downloading…</button>';
+  } else if (u.available) {
+    desc = `Version ${esc(u.version)} is available (you have v${esc(u.current)}). SportsChud will close and open the installer.${u.error ? ' ' + esc(u.error) : ''}`;
+    btn = '<button class="ubtn" id="updInstall">Install update</button>';
+  } else if (u.checking) {
+    desc = 'Checking for updates…';
+    btn = '<button class="ghost" disabled>Checking…</button>';
+  } else {
+    const when = u.checkedAt ? ` Last checked ${new Date(u.checkedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` : '';
+    desc = u.error ? `Couldn't check for updates: ${esc(u.error)}` : `You're up to date (v${esc(u.current)}).${when}`;
+    btn = '<button class="ghost" id="updCheck">Check now</button>';
+  }
+  return `<div class="setrow"><div><b>Updates</b><span>${desc}</span></div><div>${btn}</div></div>`;
+}
+
 function renderSettings() {
   titleEl.textContent = 'Settings';
   subEl.textContent = `How SportsChud starts and runs${state.version ? ' · v' + state.version : ''}`;
@@ -802,7 +835,8 @@ function renderSettings() {
   const general = [
     ['launchAtStartup', 'Launch at startup', 'Open SportsChud automatically when you sign in to Windows.'],
     ['startSilently', 'Start silently', 'On startup, run in the background with no window. Open it from the tray icon. Needs "Keep running in tray".'],
-    ['keepInTray', 'Keep running in tray', 'Closing the window hides it to the tray so alerts keep coming. Quit from the tray icon.']
+    ['keepInTray', 'Keep running in tray', 'Closing the window hides it to the tray so alerts keep coming. Quit from the tray icon.'],
+    ['checkForUpdates', 'Check for updates automatically', 'Looks for a newer SportsChud on GitHub at startup and every few hours. It never installs anything until you click Install.']
   ];
   const autohide = [
     ['playoffsAutoHide', 'Autohide Playoffs', 'Only show the Playoffs tab while one of your teams is still alive in a postseason. It disappears if your teams missed the playoffs or are eliminated. Turn off to always show it.'],
@@ -816,6 +850,7 @@ function renderSettings() {
       <button class="switch ${isOn(k) ? 'on' : ''}" data-set="${k}" role="switch" aria-checked="${isOn(k)}" aria-label="${title}"></button>
     </div>`;
   view.innerHTML = `<div class="setlist">
+    ${updateRow()}
     ${general.map(row).join('')}
     <h3 class="sethead">Autohide</h3>
     ${autohide.map(row).join('')}
@@ -823,6 +858,8 @@ function renderSettings() {
       <div><b>Clear all app data</b><span>Removes your teams, alert choices, sidebar layout, startup settings and cached data, then closes SportsChud. The next time you open it, it's like a fresh install.</span></div>
       <div id="resetbox"><button class="dbtn" id="resetBtn">Clear data…</button></div>
     </div></div>`;
+  if ($('#updCheck')) $('#updCheck').onclick = () => api.checkUpdate();
+  if ($('#updInstall')) $('#updInstall').onclick = () => api.installUpdate();
   $('#resetBtn').onclick = () => {
     $('#resetbox').innerHTML = `<button class="ghost" id="resetNo">Cancel</button> <button class="dbtn" id="resetYes">Yes, erase everything</button>`;
     $('#resetNo').onclick = () => renderSettings();
@@ -1035,6 +1072,14 @@ $('#test').onclick = () => api.testNotification();
   }
 
   try { state.version = await api.version(); } catch (_) {}
+  try { state.update = await api.updateState(); } catch (_) {}
+  $('#updbar').onclick = () => setTab('settings');
+  api.onUpdate((u) => {
+    state.update = u;
+    renderUpdBar();
+    if (state.tab === 'settings') renderSettings();
+  });
+  renderUpdBar();
   buildNav();
   refreshPlayoffStatus();
   setInterval(refreshPlayoffStatus, 30 * 60000);

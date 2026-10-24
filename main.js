@@ -4,6 +4,8 @@ const fs = require('fs');
 const { LEAGUES, teamsUrl, dayStr } = require('./leagues');
 const { Engine, parseEvent, fetchDays, fetchStandings, isPostseason, fetchPlayoffs, followedAlive, isInSeason, fetchRoster, fetchInjuries } = require('./engine');
 
+const { Updater } = require('./updater');
+
 const DEFAULT_ALERTS = { reminder: true, start: true, period: true, score: true, close: true, overtime: true, final: true };
 const ICON = path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
 let win;
@@ -11,7 +13,7 @@ let tray = null;
 let quitting = false;
 let resetting = false;
 const startHidden = process.argv.includes('--hidden');
-let settings = { follows: [], reminderMinutes: 15, launchAtStartup: false, startSilently: false, keepInTray: true, playoffsAutoHide: true, hideOffSeason: false, activityAutoHide: true, groupBy: 'team', navOrder: null, navLocked: true };
+let settings = { follows: [], reminderMinutes: 15, launchAtStartup: false, startSilently: false, keepInTray: true, playoffsAutoHide: true, hideOffSeason: false, activityAutoHide: true, checkForUpdates: true, groupBy: 'team', navOrder: null, navLocked: true };
 const activity = [];
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 
@@ -207,6 +209,25 @@ const engine = new Engine({
   }
 });
 
+// Checks GitHub releases for a newer installer (installed app only, see updater.js)
+const updater = new Updater({
+  getSettings: () => settings,
+  onChange: (state) => {
+    if (win && !win.isDestroyed()) win.webContents.send('update:state', state);
+  },
+  onAvailable: (version) => {
+    const n = new Notification({ title: 'SportsChud update available', body: `Version ${version} is ready. Open Settings to install it.`, icon: ICON });
+    n.on('click', () => showWindow());
+    n.show();
+  },
+  beforeQuit: () => {
+    // The installer is starting: close so it can replace the app's files
+    quitting = true;
+    engine.stop();
+    setTimeout(() => app.quit(), 800);
+  }
+});
+
 function createWindow(forceShow = false) {
   win = new BrowserWindow({
     width: 1180,
@@ -257,7 +278,11 @@ app.whenReady().then(() => {
   ensureDesktopShortcut();
   createWindow();
   engine.start();
+  updater.start();
 
+  ipcMain.handle('update:state', () => ({ ...updater.state }));
+  ipcMain.handle('update:check', () => updater.check({ manual: true }));
+  ipcMain.handle('update:install', () => updater.install());
   ipcMain.handle('leagues', () => LEAGUES);
   ipcMain.handle('defaults', () => DEFAULT_ALERTS);
   ipcMain.handle('settings:get', () => settings);
@@ -277,7 +302,7 @@ app.whenReady().then(() => {
   ipcMain.handle('app:reset', async () => {
     resetting = true;
     engine.stop();
-    settings = { follows: [], reminderMinutes: 15, launchAtStartup: false, startSilently: false, keepInTray: true, playoffsAutoHide: true, hideOffSeason: false, activityAutoHide: true, groupBy: 'team', navOrder: null, navLocked: true };
+    settings = { follows: [], reminderMinutes: 15, launchAtStartup: false, startSilently: false, keepInTray: true, playoffsAutoHide: true, hideOffSeason: false, activityAutoHide: true, checkForUpdates: true, groupBy: 'team', navOrder: null, navLocked: true };
     applyStartup(); // removes the start-at-login entry
     try { await session.defaultSession.clearStorageData(); await session.defaultSession.clearCache(); } catch (_) {}
     const legacy = path.join(app.getPath('appData'), 'Gametime', 'settings.json');

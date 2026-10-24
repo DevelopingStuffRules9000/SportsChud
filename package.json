@@ -1,7 +1,7 @@
 {
   "name": "sportschud",
   "productName": "SportsChud",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "description": "Live game alerts for NHL, MLB, NFL, NCAAF and NBA",
   "author": "SportsChud",
   "main": "main.js",
@@ -17,7 +17,7 @@
     "appId": "com.sportschud.app",
     "productName": "SportsChud",
     "directories": { "output": "dist" },
-    "files": ["main.js", "preload.js", "engine.js", "leagues.js", "renderer/**/*", "assets/icon.ico", "assets/icon.png", "package.json"],
+    "files": ["main.js", "preload.js", "engine.js", "leagues.js", "updater.js", "renderer/**/*", "assets/icon.ico", "assets/icon.png", "package.json"],
     "win": {
       "icon": "assets/icon.ico",
       "target": [{ "target": "zip", "arch": ["x64"] }],

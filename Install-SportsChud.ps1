@@ -17,7 +17,7 @@ param(
 )
 
 # >>> Set this to your GitHub "username/repository" (the repository must be public). <<<
-$Repo = "YOUR-GITHUB-USERNAME/SportsChud"
+$Repo = "Vibedea/SportsChud"
 
 $ErrorActionPreference = "Stop"
 

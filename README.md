@@ -22,7 +22,12 @@ The installer (`SportsChud-Setup.exe`) lets you pick the folder and installs to 
 1. Set `version` in `package.json`, commit and push.
 2. Tag it and push the tag, e.g. `v0.3.4`. GitHub Desktop: History tab, right-click the commit, Create Tag. Then Push origin.
 3. The workflow builds the installer and attaches `SportsChud-Setup.exe` to a GitHub Release.
-4. On any PC, run `Install-SportsChud.ps1` (set your `username/repository` at the top of the file first). It downloads the latest release and installs it silently to Program Files.
+4. On any PC, run `Install-SportsChud.ps1`. It downloads the latest release and installs it silently to Program Files. (The GitHub `username/repository` is set at the top of that file and in `updater.js`; change both if the account or repo is renamed.)
+
+The tag must match `version` in `package.json` (for example tag `v0.4.1` for version `0.4.1`). The build fails on purpose if they differ.
+
+## Updates
+The installed app checks GitHub for a newer release 20 seconds after it starts and then every 6 hours. When one exists you get a notification, a banner under the title bar, and an **Install update** button in Settings. Clicking it downloads `SportsChud-Setup.exe`, opens the installer (Windows asks for administrator permission, since the app lives in Program Files) and closes SportsChud so the installer can replace it. It never installs anything on its own. Turn the automatic check off in Settings with **Check for updates automatically**; **Check now** still works. Updates only apply to the installed app, not to a copy run from source with the `.bat` files. Versions before 0.4.0 can't update themselves, so install 0.4.0 by hand once.
 
 ## How it works
 - **Standings** shows every league's table (conferences for NHL/NBA, divisions for MLB/NFL) with your followed teams highlighted and clinch markers (x, y, z, e) where ESPN provides them.

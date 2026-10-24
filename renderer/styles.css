@@ -270,6 +270,11 @@ nav { display: flex; flex-direction: column; gap: 8px; }
 .rbtn.hi { background: linear-gradient(135deg, var(--amber), var(--orange)); color: #1b1030; border-color: transparent; }
 /* danger zone */
 .setrow.danger { border-color: rgba(255, 84, 112, 0.45); margin-top: 18px; }
+.updbar { margin: 0 40px 4px; padding: 9px 16px; border-radius: 12px; border: 1px solid rgba(255, 190, 90, 0.55); background: linear-gradient(135deg, rgba(255, 138, 42, 0.22), rgba(255, 190, 90, 0.14)); color: var(--text); font-weight: 700; font-size: 13px; text-align: left; cursor: pointer; }
+.updbar:hover { background: linear-gradient(135deg, rgba(255, 138, 42, 0.32), rgba(255, 190, 90, 0.22)); }
+.updbar[hidden] { display: none; }
+.ubtn { padding: 10px 16px; border-radius: 12px; border: 0; background: linear-gradient(135deg, var(--amber), var(--orange)); color: #1b1030; font-weight: 800; cursor: pointer; white-space: nowrap; }
+.ubtn:disabled { opacity: 0.5; cursor: default; }
 .dbtn { padding: 10px 16px; border-radius: 12px; border: 1px solid rgba(255,84,112,0.6); background: rgba(255,84,112,0.15); color: #ff9aa9; font-weight: 700; cursor: pointer; white-space: nowrap; }
 .dbtn:hover { background: rgba(255,84,112,0.3); }
 #resetbox { display: flex; gap: 8px; flex: none; align-items: center; }
