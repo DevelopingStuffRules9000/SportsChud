@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('api', {
   schedule: (start, end) => ipcRenderer.invoke('schedule', { start, end }),
   standings: (key) => ipcRenderer.invoke('standings', key),
   playoffStatus: () => ipcRenderer.invoke('playoffs:status'),
+  outTeams: () => ipcRenderer.invoke('teams:out'),
   version: () => ipcRenderer.invoke('app:version'),
   seasonStatus: () => ipcRenderer.invoke('seasons:status'),
   playoffs: () => ipcRenderer.invoke('playoffs'),

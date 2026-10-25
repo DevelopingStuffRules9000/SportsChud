@@ -17,7 +17,7 @@ param(
 )
 
 # >>> Set this to your GitHub "username/repository" (the repository must be public). <<<
-$Repo = "Vibedea/SportsChud"
+$Repo = "Vibeology/SportsChud"
 
 $ErrorActionPreference = "Stop"
 

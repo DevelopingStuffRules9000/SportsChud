@@ -309,11 +309,26 @@ async function isPostseason(l, ttl = 600000) {
 
 // Builds the series (or single games, e.g. NFL) from postseason scoreboard events. ESPN attaches the
 // running series score to every playoff event, so no separate bracket feed is needed.
-async function fetchPlayoffs(l) {
+// `back` = how many days of results to look at (the Playoffs tab uses the default; working out who is out of the
+// playoffs looks back over the whole postseason), `keepDays` = how long a finished series stays in the list.
+async function fetchPlayoffs(l, { back = 14, keepDays = 4 } = {}) {
   const now = new Date();
-  const days = [];
-  for (let i = -14; i <= 2; i++) days.push(dayStr(new Date(now.getFullYear(), now.getMonth(), now.getDate() + i)));
-  const { events, errors } = await fetchDays(l, days, 300000);
+  const dayOf = (i) => dayStr(new Date(now.getFullYear(), now.getMonth(), now.getDate() + i));
+  let events, errors;
+  if (back <= 14) {
+    const days = [];
+    for (let i = -back; i <= 2; i++) days.push(dayOf(i));
+    ({ events, errors } = await fetchDays(l, days, 300000));
+  } else {
+    // Long look-back: results older than a few days don't change, so those days are cached for hours
+    const recent = [], old = [];
+    for (let i = -back; i <= 2; i++) (i >= -3 ? recent : old).push(dayOf(i));
+    const [a, b] = await Promise.all([fetchDays(l, recent, 300000), fetchDays(l, old, 6 * 3600000)]);
+    const byId = new Map();
+    for (const ev of [...a.events, ...b.events]) byId.set(ev.id, ev);
+    events = [...byId.values()];
+    errors = [...new Set([...a.errors, ...b.errors])];
+  }
 
   const groups = new Map();
   for (const ev of events) {
@@ -363,11 +378,12 @@ async function fetchPlayoffs(l) {
       live: liveGame ? { label: liveGame.g.label, clock: liveGame.g.kind === 'baseball' ? '' : liveGame.g.clock, gameNo: liveGame.gameNo } : null,
       next: !completed && nextGame ? { date: nextGame.g.date, gameNo: nextGame.gameNo } : null,
       state: cur.g.state,
+      firstDate: first.date,
       lastDate: lastGame.g.date
     });
   }
   // Drop series that finished a while ago; keep the freshest results on screen
-  const cutoff = Date.now() - 4 * 86400000;
+  const cutoff = Date.now() - keepDays * 86400000;
   const kept = out.filter((s) => !s.completed || new Date(s.lastDate).getTime() >= cutoff);
   return { series: kept, errors };
 }
@@ -384,6 +400,63 @@ function followedAlive(series, ids) {
     if (winner && ids.has(winner.id)) return true;
   }
   return false;
+}
+
+// How a team stands in the postseason, judged by its newest series: 'alive' while that series is still going or
+// once it has won it (the next round may not be scheduled yet), 'out' if it lost it, 'absent' if it is in none.
+function playoffsOutcome(series, teamId) {
+  const mine = series
+    .filter((s) => s.teams.some((t) => t.id === teamId))
+    .sort((a, b) => new Date(a.lastDate) - new Date(b.lastDate));
+  if (!mine.length) return 'absent';
+  const s = mine[mine.length - 1];
+  if (!s.completed) return 'alive';
+  const val = (t) => (s.single ? t.score : t.wins);
+  const [a, b] = s.teams;
+  const winner = val(a) === val(b) ? null : val(a) > val(b) ? a : b;
+  return !winner || winner.id === teamId ? 'alive' : 'out'; // no clear winner: don't guess
+}
+
+/* ---------- Teams that are out ---------- */
+// Which followed teams are out of the season or the playoffs, as "league:teamId" keys. Only ever answers "out"
+// on positive evidence, because a wrong answer would hide a live team from the app:
+//   - it lost its newest playoff series,
+//   - ESPN's standings mark it eliminated ("e"),
+//   - NHL and NBA only (no byes): the playoffs have been going for a few days and it never appeared in them.
+// MLB and NFL give the top seeds byes and college bowls are one game each, so for those an absent team is
+// just waiting for its first game and counts as alive. Anything that can't be worked out counts as alive.
+const OUT_AFTER_DAYS = 3;
+async function fetchOutTeams(follows) {
+  const out = [];
+  const byLeague = new Map();
+  for (const f of follows || []) {
+    if (!byLeague.has(f.league)) byLeague.set(f.league, []);
+    byLeague.get(f.league).push(f);
+  }
+  await Promise.all([...byLeague].map(async ([key, teams]) => {
+    const l = LEAGUES.find((x) => x.key === key);
+    if (!l) return;
+    const out0 = new Set();
+    let elim = new Set();
+    try {
+      const st = await fetchStandings(l);
+      for (const g of st.groups) for (const r of g.rows) if (r.clincher === 'e') elim.add(r.teamId);
+    } catch (_) {} // no standings: judge by the playoffs alone
+    try {
+      if (await isPostseason(l)) {
+        const { series, errors } = await fetchPlayoffs(l, { back: 75, keepDays: 3650 });
+        const hasByes = l.kind === 'baseball' || l.kind === 'football';
+        const started = series.length ? Math.min(...series.map((s) => new Date(s.firstDate).getTime())) : Infinity;
+        const settled = !errors.length && series.length > 0 && Date.now() - started >= OUT_AFTER_DAYS * 86400000;
+        for (const f of teams) {
+          const o = playoffsOutcome(series, f.teamId);
+          if (o === 'out' || (o === 'absent' && !hasByes && settled)) out0.add(f.teamId);
+        }
+      }
+    } catch (_) {}
+    for (const f of teams) if (out0.has(f.teamId) || elim.has(f.teamId)) out.push(`${key}:${f.teamId}`);
+  }));
+  return out;
 }
 
 /* ---------- Season status ---------- */
@@ -811,4 +884,4 @@ class Engine {
   }
 }
 
-module.exports = { Engine, parseEvent, periodInfo, fetchDays, fetchStandings, standingsSnapshot, standingsChanges, parseScoringPlays, playsBetween, cleanPlayText, isPostseason, fetchPlayoffs, followedAlive, isInSeason, fetchRoster, fetchInjuries, parseRoster, parseInjuries };
+module.exports = { Engine, parseEvent, periodInfo, fetchDays, fetchStandings, standingsSnapshot, standingsChanges, parseScoringPlays, playsBetween, cleanPlayText, isPostseason, fetchPlayoffs, followedAlive, playoffsOutcome, fetchOutTeams, isInSeason, fetchRoster, fetchInjuries, parseRoster, parseInjuries };

@@ -31,6 +31,7 @@ const state = {
   playoffLeagues: [],
   version: '',
   activeLeagues: null, // keys of leagues in season (null until known)
+  outTeams: new Set(), // "league:teamId" of followed teams that are out of the season or playoffs
   teamQuery: '',
   teamCache: {}
 };
@@ -39,17 +40,42 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 const leagueOf = (key) => state.leagues.find((l) => l.key === key);
 const isFollowed = (league, teamId) => state.settings.follows.some((f) => f.league === league && f.teamId === teamId);
 
+// A setting that counts as on unless it was saved as false (DEFAULT_ON, which must match the defaults in main.js)
+const settingOn = (k) => (DEFAULT_ON.includes(k) ? state.settings[k] !== false : !!state.settings[k]);
+
+// Why a followed team is left out of Scores, Recaps, Standings, Schedules and Injuries (null = it is shown):
+//   'season': its sport's season and playoffs are over  ("Autohide out of season sports")
+//   'out':    the team is out of the season or playoffs ("Autohide teams that are out")
+// Nothing is hidden until the status is known. Roster and the Teams tab always show every team, and alerts
+// are never affected.
+function hiddenReason(f) {
+  if (settingOn('hideOffSeason') && state.activeLeagues && !state.activeLeagues.includes(f.league)) return 'season';
+  if (settingOn('hideEliminated') && state.outTeams.has(`${f.league}:${f.teamId}`)) return 'out';
+  return null;
+}
+const shownFollows = () => state.settings.follows.filter((f) => !hiddenReason(f));
+// Is this a followed team that is currently shown? (Standings highlight, Injuries "My teams")
+const isShownFollowed = (league, teamId) => shownFollows().some((f) => f.league === league && f.teamId === teamId);
+// A game is shown when at least one of the teams playing in it is
+const gameShown = (g, shown) => shown.some((f) => f.league === g.league && (f.teamId === g.home.id || f.teamId === g.away.id));
+
 // Leagues to offer in pickers.
-//   followedOnly: drop leagues where no team is followed (Standings, Injuries, Roster). The Teams picker leaves
-//                 this off, otherwise there would be no way to follow a first team.
-// With "Autohide out of season sports" on, leagues with no games coming up are dropped too. That filter never
-// empties a list by itself and does nothing until the season status is known.
+//   followedOnly: only leagues that still have a shown team (Standings, Injuries). This is what takes a sport out once
+//                 its season is over or every team you follow in it is out. The Teams picker leaves it off, otherwise
+//                 there would be no way to follow a first team.
 function visibleLeagues(extra = () => true, followedOnly = false) {
-  let base = state.leagues.filter(extra);
-  if (followedOnly) base = base.filter((l) => state.settings.follows.some((f) => f.league === l.key));
-  if (!state.settings.hideOffSeason || !state.activeLeagues) return base;
-  const live = base.filter((l) => state.activeLeagues.includes(l.key));
-  return live.length ? live : base;
+  const base = state.leagues.filter(extra);
+  if (!followedOnly) return base;
+  const shown = shownFollows();
+  return base.filter((l) => shown.some((f) => f.league === l.key));
+}
+
+// Shown instead of a section when you follow teams but every one of them is currently hidden by the Autohide settings
+const allHiddenHtml = (what) => `<div class="empty"><h3>Nothing to show right now</h3><p>The teams you follow are hidden from ${what} because their sport is out of season or they're out of the playoffs. You can change this under Autohide in Settings.</p>
+  <button class="cta" id="goSettings">Open Settings</button></div>`;
+function showAllHidden(what) {
+  view.innerHTML = allHiddenHtml(what);
+  $('#goSettings').onclick = () => setTab('settings');
 }
 // Header pills: every pill group lives here, on the same line as the title. render() clears them on every tab change.
 // One line, left to right: the league or team picker (picker), a | divider, then option pills (opts).
@@ -78,9 +104,23 @@ const noFollowedHtml = (what) => `<div class="empty"><h3>Pick your teams</h3><p>
 // Keeps a picker's current choice valid when its league list changes
 const validLeague = (cur, list) => (list.some((l) => l.key === cur) ? cur : list[0].key);
 
+// Tabs whose contents depend on the Autohide settings (Roster never does)
+const HIDING_TABS = ['teams', 'scores', 'schedule', 'recaps', 'standings', 'injuries'];
+
 async function refreshSeasonStatus() {
   try { state.activeLeagues = await api.seasonStatus(); } catch (_) { return; }
-  if (['teams', 'standings', 'injuries', 'roster'].includes(state.tab)) render();
+  if (HIDING_TABS.includes(state.tab)) render();
+}
+
+// Which followed teams are out of the season or the playoffs. Only asked while "Autohide teams that are out" is on.
+async function refreshOutStatus() {
+  if (!settingOn('hideEliminated')) return;
+  let list;
+  try { list = await api.outTeams(); } catch (_) { return; }
+  const next = new Set(list);
+  const same = next.size === state.outTeams.size && [...next].every((k) => state.outTeams.has(k));
+  state.outTeams = next;
+  if (!same && HIDING_TABS.includes(state.tab)) render();
 }
 
 async function persist() {
@@ -147,16 +187,20 @@ function renderScores() {
     return;
   }
 
+  const shown = shownFollows(); // teams hidden by the Autohide settings take their games with them
+  if (!shown.length) return showAllHidden('Scores');
+  const games = state.games.filter((g) => gameShown(g, shown));
+
   const now = Date.now();
   const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
   const dayEnd = dayStart.getTime() + 86400000;
   const isToday = (g) => { const t = new Date(g.date).getTime(); return t >= dayStart.getTime() && t < dayEnd; };
   const byTime = (a, b) => new Date(a.date) - new Date(b.date);
 
-  const live = state.games.filter((g) => g.state === 'in');
-  const later = state.games.filter((g) => g.state === 'pre' && isToday(g)).sort(byTime);
-  const done = state.games.filter((g) => g.state === 'post' && now - new Date(g.date) < 36 * 3600000).sort((a, b) => byTime(b, a));
-  const next = state.games.filter((g) => g.state === 'pre' && !isToday(g)).sort(byTime).slice(0, 3);
+  const live = games.filter((g) => g.state === 'in');
+  const later = games.filter((g) => g.state === 'pre' && isToday(g)).sort(byTime);
+  const done = games.filter((g) => g.state === 'post' && now - new Date(g.date) < 36 * 3600000).sort((a, b) => byTime(b, a));
+  const next = games.filter((g) => g.state === 'pre' && !isToday(g)).sort(byTime).slice(0, 3);
 
   subEl.textContent = live.length ? `${live.length} live right now` : later.length ? `${later.length} game${later.length > 1 ? 's' : ''} later today` : 'Nothing live right now';
 
@@ -165,7 +209,7 @@ function renderScores() {
   let html;
   if (groupMode() === 'team') {
     // One block per followed team: its live game, today's games and recent finals, or its next game if none
-    const blocks = state.settings.follows.map((f) => {
+    const blocks = shown.map((f) => {
       const mine = (list) => gamesOfTeam(f, list);
       let games = [...mine(live), ...mine(later), ...mine(done)];
       if (!games.length) games = mine(next).slice(0, 1);
@@ -195,7 +239,7 @@ state.cal = { view: 'week', date: startOfDay(new Date()).getTime() };
 
 // Everything the UI needs to describe a game from the followed team's point of view
 function perspective(g, fol) {
-  const follows = state.settings.follows.filter((f) => f.league === g.league);
+  const follows = shownFollows().filter((f) => f.league === g.league); // the team that is still shown is "mine"
   const mine = (fol ? fol.teamId === g.away.id : follows.some((f) => f.teamId === g.away.id)) ? g.away : g.home;
   const opp = mine === g.away ? g.home : g.away;
   const home = mine === g.home;
@@ -260,15 +304,17 @@ function calTitle() {
 
 async function renderSchedule() {
   titleEl.textContent = 'Schedules';
-  const n = state.settings.follows.length;
-  subEl.textContent = n ? `Games for all ${n} of your teams` : '';
+  const shown = shownFollows();
+  const n = shown.length;
+  subEl.textContent = n ? `Games for ${n === state.settings.follows.length ? `all ${n}` : n} of your teams` : '';
 
-  if (!n) {
+  if (!state.settings.follows.length) {
     view.innerHTML = `<div class="empty"><h3>Pick your teams</h3><p>Follow a few teams and every one of their games shows up here.</p>
       <button class="cta" id="goTeams">Choose teams</button></div>`;
     $('#goTeams').onclick = () => setTab('teams');
     return;
   }
+  if (!n) return showAllHidden('Schedules');
 
   const cal = state.cal;
   setActions([['day', 'Day'], ['week', 'Week'], ['month', 'Month']], cal.view, (k) => { cal.view = k; renderSchedule(); });
@@ -315,7 +361,7 @@ async function renderSchedule() {
   }
 
   // only keep games that actually fall inside the visible range (the fetch pads a day each side)
-  const games = result.games.filter((g) => { const t = new Date(g.date); return t >= start && t < end; });
+  const games = result.games.filter((g) => { const t = new Date(g.date); return t >= start && t < end && gameShown(g, shown); });
   const byDay = new Map();
   for (const g of games) {
     const k = dayKey(new Date(g.date));
@@ -438,6 +484,7 @@ async function renderTeams() {
       else state.settings.follows.push({ ...t, alerts: { ...state.defaults } });
       await persist();
       refreshPlayoffStatus();
+      refreshOutStatus(); // a newly followed team may already be out
       const top = view.scrollTop;
       await renderTeams();
       view.scrollTop = top;
@@ -488,6 +535,7 @@ async function renderStandings() {
   subEl.textContent = '';
   const stLeagues = visibleLeagues(() => true, true);
   if (!stLeagues.length) {
+    if (state.settings.follows.length && shownFollows().length !== state.settings.follows.length) return showAllHidden('Standings');
     view.innerHTML = noFollowedHtml('its standings');
     $('#goTeams').onclick = () => setTab('teams');
     return;
@@ -525,7 +573,7 @@ async function renderStandings() {
       <table class="stbl">
         <thead><tr><th class="rk">#</th><th class="tmh">Team</th>${l.cols.map(([label]) => `<th>${esc(label)}</th>`).join('')}</tr></thead>
         <tbody>${g.rows.map((r, i) => `
-          <tr class="${isFollowed(key, r.teamId) ? 'mine' : ''}">
+          <tr class="${isShownFollowed(key, r.teamId) ? 'mine' : ''}">
             <td class="rk">${i + 1}</td>
             <td class="tmc"><div class="tm"><img src="${esc(r.logo)}" alt="" onerror="this.style.visibility='hidden'" /><span>${esc(r.name)}</span>${r.clincher ? `<span class="cl" title="${esc(CLINCH[r.clincher] || 'Clinch status')}">${esc(r.clincher)}</span>` : ''}</div></td>
             ${l.cols.map(([, k]) => `<td>${esc(r.stats[k] != null ? r.stats[k] : '–')}</td>`).join('')}
@@ -625,12 +673,7 @@ async function renderRoster() {
     $('#goTeams').onclick = () => setTab('teams');
     return;
   }
-  const open = new Set(visibleLeagues(() => true, true).map((l) => l.key));
-  const follows = all.filter((f) => open.has(f.league));
-  if (!follows.length) {
-    view.innerHTML = `<div class="empty"><h3>Your sports are out of season</h3><p>The leagues you follow have no games coming up. Turn off Autohide out of season sports in Settings to see their rosters.</p></div>`;
-    return;
-  }
+  const follows = all; // Roster is the one section the Autohide settings never touch: every followed team stays here
   if (!follows.some((f) => followKey(f) === state.rosterKey)) state.rosterKey = followKey(follows[0]);
   const f = follows.find((x) => followKey(x) === state.rosterKey);
   const lg = leagueOf(f.league);
@@ -722,6 +765,7 @@ async function renderInjuries() {
   subEl.textContent = '';
   const injLeagues = visibleLeagues((l) => !l.noInjuries, true); // ESPN has no injury feed for some leagues
   if (!injLeagues.length) {
+    if (state.settings.follows.length && shownFollows().length !== state.settings.follows.length) return showAllHidden('Injuries');
     view.innerHTML = noFollowedHtml('its injury report');
     $('#goTeams').onclick = () => setTab('teams');
     return;
@@ -729,7 +773,7 @@ async function renderInjuries() {
   if (!injLeagues.some((l) => l.key === state.injLeague)) state.injLeague = injLeagues[0].key;
   const key = state.injLeague;
   const lg = leagueOf(key);
-  const followed = (t) => isFollowed(key, t.teamId);
+  const followed = (t) => isShownFollowed(key, t.teamId); // a team that is hidden by Autohide isn't "mine" here
   setActions([['mine', 'My teams'], ['all', 'Whole league']], state.injScope, (k) => { state.injScope = k; renderInjuries(); }, {
     items: injLeagues.map((x) => [x.key, `${x.icon} ${esc(x.name)}`]),
     current: key,
@@ -762,7 +806,7 @@ async function renderInjuries() {
   subEl.textContent = `${lg.name} · ${n} player${n === 1 ? '' : 's'} on injury reports`;
 
   if (!teams.length) {
-    const follows = state.settings.follows.some((f) => f.league === key);
+    const follows = shownFollows().some((f) => f.league === key);
     view.innerHTML = `<div class="empty"><h3>${follows ? 'All clear' : `No ${esc(lg.name)} teams followed`}</h3>
       <p>${follows ? `None of your ${esc(lg.name)} teams have anyone on the injury report.` : 'Follow a team on the Teams tab, or look at the whole league.'}</p>
       <button class="cta" id="injAll">Show whole league</button></div>`;
@@ -795,7 +839,7 @@ async function renderInjuries() {
 
 /* ---------- Settings view ---------- */
 // Settings that are on unless explicitly saved as false (keep in sync with the defaults in main.js)
-const DEFAULT_ON = ['keepInTray', 'playoffsAutoHide', 'activityAutoHide', 'checkForUpdates'];
+const DEFAULT_ON = ['keepInTray', 'playoffsAutoHide', 'activityAutoHide', 'checkForUpdates', 'hideOffSeason', 'hideEliminated'];
 
 // Update banner (under the header) and the Updates row in Settings. state.update comes from main (updater.js).
 function renderUpdBar() {
@@ -803,7 +847,7 @@ function renderUpdBar() {
   const u = state.update;
   const show = !!(u && u.supported && u.available);
   bar.hidden = !show;
-  if (show) bar.textContent = u.downloading ? `Downloading SportsChud v${u.version}… ${u.progress}%` : `SportsChud v${u.version} is available. Click to open Settings and install it.`;
+  if (show) bar.textContent = u.installing ? 'Download finished. Closing SportsChud to run the installer…' : u.downloading ? `Downloading SportsChud v${u.version}… ${u.progress}%` : `SportsChud v${u.version} is available. Click to open Settings and install it.`;
 }
 function updateRow() {
   const u = state.update;
@@ -812,6 +856,9 @@ function updateRow() {
   let btn = '';
   if (!u.supported) {
     desc = 'Updates work in the installed version of SportsChud. This copy is running from source.';
+  } else if (u.installing) {
+    desc = `Download finished. SportsChud is closing now so the installer can replace it, then the installer opens. You'll be asked for administrator permission.`;
+    btn = '<button class="ubtn" disabled>Closing…</button>';
   } else if (u.downloading) {
     desc = `Downloading v${esc(u.version)}… ${u.progress}%. SportsChud will close and open the installer when it finishes.`;
     btn = '<button class="ubtn" disabled>Downloading…</button>';
@@ -838,12 +885,14 @@ function renderSettings() {
     ['startSilently', 'Start silently', 'On startup, run in the background with no window. Open it from the tray icon. Needs "Keep running in tray".'],
     ['keepInTray', 'Keep running in tray', 'Closing the window hides it to the tray so alerts keep coming. Quit from the tray icon.'],
     ['overlayEnabled', 'Mini scoreboard', 'A small always-on-top window with the score and clock of your live games. Drag it anywhere; it remembers where you left it. Also in the tray menu.'],
-    ['checkForUpdates', 'Check for updates automatically', 'Looks for a newer SportsChud on GitHub at startup and every few hours. It never installs anything until you click Install.']
+    ['checkForUpdates', 'Check for updates automatically', 'Looks for a newer SportsChud on GitHub at startup and every few hours. It never installs anything until you click Install.'],
+    ['showTestAlert', 'Show "Send test alert" button', 'Adds a Send test alert button to the bottom of the sidebar, for checking that Windows notifications work. Off by default.']
   ];
   const autohide = [
     ['playoffsAutoHide', 'Autohide Playoffs', 'Only show the Playoffs tab while one of your teams is still alive in a postseason. It disappears if your teams missed the playoffs or are eliminated. Turn off to always show it.'],
     ['activityAutoHide', 'Autohide Activity', 'Only show the Activity tab once the first alert of the session has been sent. Turn off to always show it.'],
-    ['hideOffSeason', 'Autohide out of season sports', 'Leave leagues with no games in the next week and a half out of Teams, Standings, Injuries and Roster. Alerts for teams you follow keep working. Turn off to always list every league.'],
+    ['hideOffSeason', 'Autohide out of season sports', 'When a sport\'s season and playoffs are over (no games in the last couple of days or the next week and a half), take that sport and your teams in it out of Scores, Recaps, Standings, Schedules and Injuries. Roster and Teams still list them, and alerts keep working.'],
+    ['hideEliminated', 'Autohide teams that are out', 'When one of your teams is out of the season or the playoffs (it lost its last playoff series, missed the playoffs, or ESPN marks it eliminated), take that team out of Scores, Recaps, Standings, Schedules and Injuries. If that was your only team in a sport, the sport goes too. Roster and Teams still list it, and alerts keep working.'],
     ['overlayAutoHide', 'Autohide Mini scoreboard', 'Only show the mini scoreboard while one of your teams is playing a live game. Turn off to keep it on screen with a "No live games" message. Needs "Mini scoreboard" turned on.']
   ];
   const isOn = (k) => (DEFAULT_ON.includes(k) ? st[k] !== false : !!st[k]);
@@ -886,6 +935,8 @@ function renderSettings() {
       await persist();
       if (k === 'playoffsAutoHide' || k === 'activityAutoHide') buildNav();
       if (k === 'hideOffSeason' && st[k]) await refreshSeasonStatus();
+      if (k === 'hideEliminated' && st[k]) await refreshOutStatus();
+      if (k === 'showTestAlert') applyTestButton();
       renderSettings();
     };
   });
@@ -985,6 +1036,8 @@ async function renderRecaps() {
     $('#goTeams').onclick = () => setTab('teams');
     return;
   }
+  const shown = shownFollows();
+  if (!shown.length) { subEl.textContent = ''; return showAllHidden('Recaps'); }
   subEl.textContent = `Last ${RECAP_GAMES} finals for each of your teams`;
   view.innerHTML = `<div class="empty"><p>Loading recaps…</p></div>`;
   // Look back far enough that weekly sports (NFL, NCAAF, with a bye) still have 3 finals to show
@@ -1003,7 +1056,7 @@ async function renderRecaps() {
   // Newest RECAP_GAMES finals per followed team; By status shows the union of those games
   const keep = new Set();
   const perTeam = new Map();
-  for (const f of state.settings.follows) {
+  for (const f of shown) {
     const list = gamesOfTeam(f, finals).slice(0, RECAP_GAMES);
     perTeam.set(f, list);
     list.forEach((g) => keep.add(g.id));
@@ -1034,7 +1087,7 @@ async function renderRecaps() {
   const warn = result.errors.length ? `<div class="calnote warn">Some games may be missing: ${esc(result.errors.join('; '))}</div>` : '';
   pickGroup(renderRecaps);
   if (groupMode() === 'team') {
-    const blocks = state.settings.follows.map((f) => ({ f, list: perTeam.get(f) })).filter((b) => b.list.length);
+    const blocks = shown.map((f) => ({ f, list: perTeam.get(f) })).filter((b) => b.list.length);
     view.innerHTML = warn + blocks.map((b) => `${teamHead(b.f)}<div class="rgrid">${b.list.map((g) => card(g, b.f)).join('')}</div>`).join('');
   } else {
     view.innerHTML = warn + `<div class="rgrid">${games.map((g) => card(g)).join('')}</div>`;
@@ -1065,6 +1118,8 @@ function setTab(tab) {
 
 $('#navSettings').onclick = () => setTab('settings');
 $('#test').onclick = () => api.testNotification();
+// The test button is only in the sidebar while "Show Send test alert button" is on (off by default)
+function applyTestButton() { $('#test').hidden = !settingOn('showTestAlert'); }
 
 /* ---------- Boot ---------- */
 (async function init() {
@@ -1080,6 +1135,7 @@ $('#test').onclick = () => api.testNotification();
     persist();
   }
 
+  applyTestButton();
   try { state.version = await api.version(); } catch (_) {}
   try { state.update = await api.updateState(); } catch (_) {}
   $('#updbar').onclick = () => setTab('settings');
@@ -1094,6 +1150,8 @@ $('#test').onclick = () => api.testNotification();
   setInterval(refreshPlayoffStatus, 30 * 60000);
   refreshSeasonStatus();
   setInterval(refreshSeasonStatus, 3 * 3600000);
+  refreshOutStatus();
+  setInterval(refreshOutStatus, 30 * 60000);
 
   api.onGames((g) => {
     state.games = g;

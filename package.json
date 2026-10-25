@@ -1,7 +1,7 @@
 {
   "name": "sportschud",
   "productName": "SportsChud",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Live game alerts for NHL, MLB, NFL, NCAAF and NBA",
   "author": "SportsChud",
   "main": "main.js",
@@ -20,8 +20,7 @@
     "files": ["main.js", "preload.js", "engine.js", "leagues.js", "updater.js", "renderer/**/*", "assets/icon.ico", "assets/icon.png", "package.json"],
     "win": {
       "icon": "assets/icon.ico",
-      "target": [{ "target": "zip", "arch": ["x64"] }],
-      "signAndEditExecutable": false
+      "target": [{ "target": "zip", "arch": ["x64"] }]
     },
     "artifactName": "SportsChud-Windows.${ext}",
     "nsis": {

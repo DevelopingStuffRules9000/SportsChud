@@ -58,6 +58,7 @@ button, select { -webkit-app-region: no-drag; font: inherit; color: inherit; }
 .spacer { flex: 1; }
 .ghost { padding: 11px 14px; border-radius: 14px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.04); color: var(--muted); cursor: pointer; font-weight: 600; transition: all 0.2s; }
 .ghost:hover { color: var(--text); background: rgba(255, 255, 255, 0.1); }
+#test[hidden] { display: none; }
 
 /* ---------- Main ---------- */
 main { display: flex; flex-direction: column; min-width: 0; height: 100vh; }

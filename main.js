@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, Notification, shell, Tray, Menu, nativeImag
 const path = require('path');
 const fs = require('fs');
 const { LEAGUES, teamsUrl, dayStr } = require('./leagues');
-const { Engine, parseEvent, fetchDays, fetchStandings, isPostseason, fetchPlayoffs, followedAlive, isInSeason, fetchRoster, fetchInjuries } = require('./engine');
+const { Engine, parseEvent, fetchDays, fetchStandings, isPostseason, fetchPlayoffs, followedAlive, fetchOutTeams, isInSeason, fetchRoster, fetchInjuries } = require('./engine');
 
 const { Updater } = require('./updater');
 
@@ -13,7 +13,7 @@ let tray = null;
 let quitting = false;
 let resetting = false;
 const startHidden = process.argv.includes('--hidden');
-let settings = { follows: [], reminderMinutes: 15, launchAtStartup: false, startSilently: false, keepInTray: true, playoffsAutoHide: true, hideOffSeason: false, activityAutoHide: true, checkForUpdates: true, groupBy: 'team', navOrder: null, navLocked: true, overlayEnabled: false, overlayAutoHide: false, overlayBounds: null };
+let settings = { follows: [], reminderMinutes: 15, launchAtStartup: false, startSilently: false, keepInTray: true, playoffsAutoHide: true, hideOffSeason: true, hideEliminated: true, offSeasonDefaultApplied: true, showTestAlert: false, activityAutoHide: true, checkForUpdates: true, groupBy: 'team', navOrder: null, navLocked: true, overlayEnabled: false, overlayAutoHide: false, overlayBounds: null };
 const activity = [];
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 
@@ -31,7 +31,11 @@ function loadSettings() {
   const legacy = path.join(app.getPath('appData'), 'Gametime', 'settings.json');
   for (const file of [settingsFile(), legacy]) {
     try {
-      settings = { ...settings, ...JSON.parse(fs.readFileSync(file, 'utf8')) };
+      const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+      settings = { ...settings, ...saved };
+      // "Autohide out of season sports" became on by default in 0.8.0. Settings saved before that hold the old
+      // default (off), so switch it on once; after that the saved choice is respected.
+      if (!saved.offSeasonDefaultApplied) { settings.hideOffSeason = true; settings.offSeasonDefaultApplied = true; }
       // Teams saved before an alert type existed get its default
       for (const f of settings.follows || []) f.alerts = { ...DEFAULT_ALERTS, ...f.alerts };
       return;
@@ -55,6 +59,17 @@ function stableIcon() {
   fs.mkdirSync(app.getPath('userData'), { recursive: true });
   fs.copyFileSync(path.join(__dirname, 'assets', 'icon.ico'), dest);
   return dest;
+}
+
+// Icon for windows and notifications. On Windows this is the on-disk copy from stableIcon(): the .ico inside
+// app.asar can't be read by Windows itself, which is how the taskbar ended up showing Electron's own icon.
+let iconPathCache = null;
+function appIcon() {
+  if (process.platform !== 'win32') return ICON;
+  if (!iconPathCache) {
+    try { iconPathCache = stableIcon(); } catch (_) { return ICON; }
+  }
+  return iconPathCache;
 }
 
 function shortcutOptions(iconPath) {
@@ -208,7 +223,7 @@ function createOverlay() {
     skipTaskbar: true,
     show: false,
     alwaysOnTop: true,
-    icon: ICON,
+    icon: appIcon(),
     title: 'SportsChud Scoreboard',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -296,7 +311,7 @@ async function getSchedule(startMs, endMs) {
 }
 
 function notify({ title, body, gameId }) {
-  const n = new Notification({ title, body, icon: ICON });
+  const n = new Notification({ title, body, icon: appIcon() });
   n.on('click', () => showWindow());
   n.show();
   const entry = { title, body, gameId, at: Date.now() };
@@ -322,15 +337,22 @@ const updater = new Updater({
     if (win && !win.isDestroyed()) win.webContents.send('update:state', state);
   },
   onAvailable: (version) => {
-    const n = new Notification({ title: 'SportsChud update available', body: `Version ${version} is ready. Open Settings to install it.`, icon: ICON });
+    const n = new Notification({ title: 'SportsChud update available', body: `Version ${version} is ready. Open Settings to install it.`, icon: appIcon() });
     n.on('click', () => showWindow());
     n.show();
   },
   beforeQuit: () => {
-    // The installer is starting: close so it can replace the app's files
+    // The installer has been downloaded and a helper is waiting for SportsChud to exit before it starts it.
+    // Shut everything down now (not just the window: the tray icon, mini scoreboard and timers too).
     quitting = true;
     engine.stop();
-    setTimeout(() => app.quit(), 800);
+    updater.stop();
+    closeOverlay();
+    try { if (tray) { tray.destroy(); tray = null; } } catch (_) {}
+    if (win && !win.isDestroyed()) win.destroy();
+    app.quit();
+    // Backstop: if anything is still holding the process open, force it, so the installer is never blocked
+    setTimeout(() => app.exit(0), 4000);
   }
 });
 
@@ -342,7 +364,7 @@ function createWindow(forceShow = false) {
     minHeight: 600,
     show: forceShow || !(startHidden && settings.startSilently),
     backgroundColor: '#1c1c1c',
-    icon: ICON,
+    icon: appIcon(),
     title: 'SportsChud',
     titleBarStyle: 'hidden',
     titleBarOverlay: { color: '#00000000', symbolColor: '#e8eaf6', height: 40 },
@@ -429,7 +451,7 @@ app.whenReady().then(() => {
   ipcMain.handle('app:reset', async () => {
     resetting = true;
     engine.stop();
-    settings = { follows: [], reminderMinutes: 15, launchAtStartup: false, startSilently: false, keepInTray: true, playoffsAutoHide: true, hideOffSeason: false, activityAutoHide: true, checkForUpdates: true, groupBy: 'team', navOrder: null, navLocked: true, overlayEnabled: false, overlayAutoHide: false, overlayBounds: null };
+    settings = { follows: [], reminderMinutes: 15, launchAtStartup: false, startSilently: false, keepInTray: true, playoffsAutoHide: true, hideOffSeason: true, hideEliminated: true, offSeasonDefaultApplied: true, showTestAlert: false, activityAutoHide: true, checkForUpdates: true, groupBy: 'team', navOrder: null, navLocked: true, overlayEnabled: false, overlayAutoHide: false, overlayBounds: null };
     closeOverlay();
     applyStartup(); // removes the start-at-login entry
     try { await session.defaultSession.clearStorageData(); await session.defaultSession.clearCache(); } catch (_) {}
@@ -463,6 +485,10 @@ app.whenReady().then(() => {
       } catch (_) {}
     }));
     return LEAGUES.map((l) => l.key).filter((k) => on.includes(k));
+  });
+  // Followed teams that are out of the season or the playoffs, as "league:teamId" (drives "Autohide eliminated teams")
+  ipcMain.handle('teams:out', async () => {
+    try { return await fetchOutTeams(settings.follows); } catch (_) { return []; }
   });
   ipcMain.handle('app:version', () => app.getVersion());
   // Keys of the leagues that are in season right now (drives the Autohide out of season sports setting)
