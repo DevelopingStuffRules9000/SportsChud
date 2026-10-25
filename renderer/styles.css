@@ -335,3 +335,55 @@ a[data-open]:hover { text-decoration: underline; }
 .injrow .ib span { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.35; }
 .injrow .ir { text-align: right; flex: none; }
 .injrow .ir small { display: block; font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+/* ---------- Live game panel (click a game in Scores) ---------- */
+.card.clickable { cursor: pointer; }
+.card.clickable:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+
+.dhero {
+  position: relative; overflow: hidden; border-radius: var(--radius); padding: 20px 24px 22px; margin-bottom: 6px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.03));
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+.dhero::before {
+  content: ''; position: absolute; inset: 0; z-index: 0; opacity: 0.55; pointer-events: none;
+  background:
+    radial-gradient(360px 200px at 0% 0%, color-mix(in srgb, var(--a, #4aa3ff) 42%, transparent), transparent 70%),
+    radial-gradient(360px 200px at 100% 100%, color-mix(in srgb, var(--h, #8b5cf6) 42%, transparent), transparent 70%);
+}
+.dhero > * { position: relative; z-index: 1; }
+.dmeta { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 14px; }
+.dmatch { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; }
+.dteam { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.dteam:last-child { flex-direction: row-reverse; text-align: right; }
+.dteam img { width: 64px; height: 64px; object-fit: contain; flex: none; filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.45)); }
+.dteam b { flex: 1; min-width: 0; font-size: 18px; font-weight: 700; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dteam.win b { color: var(--text); }
+.dscore { font-style: normal; font-size: 44px; font-weight: 800; font-variant-numeric: tabular-nums; flex: none; }
+.dat { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; }
+.dlines { margin-top: 18px; max-width: 560px; }
+.dlines td, .dlines th { text-align: center; }
+.dlines .tmh, .dlines .lt { text-align: left; }
+.dlines .tot { font-weight: 800; }
+.stbl .lt { text-align: left; font-weight: 600; white-space: nowrap; }
+.stbl .lt .tm { display: flex; align-items: center; gap: 8px; }
+.stbl .lt .tm img { width: 20px; height: 20px; object-fit: contain; }
+.dstats { max-width: 520px; }
+.dstats td, .dstats th { text-align: center; }
+.dstats .lt, .dstats .tmh { text-align: left; }
+.dbox { margin-bottom: 14px; }
+.dbox td, .dbox th { text-align: center; }
+.dbox .lt, .dbox .tmh { text-align: left; }
+.dbox small { color: var(--muted); font-weight: 600; }
+.dtotal td { font-weight: 800; background: rgba(0, 0, 0, 0.18); }
+
+.dlist { display: flex; flex-direction: column; gap: 8px; }
+.dplay { display: grid; grid-template-columns: 96px 1fr auto; gap: 14px; align-items: baseline; padding: 11px 14px; border-radius: 14px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.04); font-size: 14px; }
+.dplay:not(.scoring) { grid-template-columns: 96px 1fr; }
+.dplay.scoring { border-color: rgba(255, 194, 77, 0.45); background: rgba(255, 194, 77, 0.07); }
+.dwhen { color: var(--muted); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.dtag { font-style: normal; display: inline-block; margin-right: 8px; padding: 1px 7px; border-radius: 999px; background: rgba(255, 255, 255, 0.14); font-size: 11px; font-weight: 800; color: var(--amber); }
+.dnow { font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dnone { color: var(--muted); padding: 18px 4px; }
+.dfoot { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 22px; font-size: 12px; color: var(--muted); }
+.dbody .empty { padding: 50px 20px; }

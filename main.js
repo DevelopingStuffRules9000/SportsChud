@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, Notification, shell, Tray, Menu, nativeImag
 const path = require('path');
 const fs = require('fs');
 const { LEAGUES, teamsUrl, dayStr } = require('./leagues');
-const { Engine, parseEvent, fetchDays, fetchStandings, isPostseason, fetchPlayoffs, followedAlive, fetchOutTeams, isInSeason, fetchRoster, fetchInjuries } = require('./engine');
+const { Engine, parseEvent, fetchDays, fetchStandings, isPostseason, fetchPlayoffs, followedAlive, fetchOutTeams, isInSeason, fetchRoster, fetchInjuries, fetchGameDetail } = require('./engine');
 
 const { Updater } = require('./updater');
 
@@ -516,6 +516,15 @@ app.whenReady().then(() => {
     if (!l || !/^\d+$/.test(String(teamId))) return { ok: false, error: 'Unknown team', groups: [] };
     try { return { ok: true, ...(await fetchRoster(l, String(teamId))) }; }
     catch (err) { return { ok: false, error: err.message, groups: [] }; }
+  });
+  // Everything the live game panel shows (line score, scoring summary, box score, recent plays)
+  ipcMain.handle('game:detail', async (_, arg) => {
+    const { league, eventId } = arg && typeof arg === 'object' ? arg : {};
+    const l = LEAGUES.find((x) => x.key === league);
+    const id = typeof eventId === 'number' ? String(eventId) : eventId; // a missing id must not become the text "undefined"
+    if (!l || typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(id)) return { ok: false, error: 'Unknown game' };
+    try { return { ok: true, ...(await fetchGameDetail(l, id)) }; }
+    catch (err) { return { ok: false, error: err.message }; }
   });
   ipcMain.handle('injuries', async (_, key) => {
     const l = LEAGUES.find((x) => x.key === key);

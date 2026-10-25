@@ -32,6 +32,8 @@ const state = {
   version: '',
   activeLeagues: null, // keys of leagues in season (null until known)
   outTeams: new Set(), // "league:teamId" of followed teams that are out of the season or playoffs
+  detail: null, // the game open in the live panel on Scores (see "Live game panel"), or null
+  detailTimer: null,
   teamQuery: '',
   teamCache: {}
 };
@@ -169,7 +171,7 @@ function gameCard(g, i) {
   else foot = `<span>${esc(t.day)}</span><b>${esc(t.time)}</b>`;
 
   return `
-    <article class="card ${live ? 'live' : ''}" style="--a:${g.away.color || '#7c8cff'};--h:${g.home.color || '#3de0c0'};animation-delay:${i * 40}ms">
+    <article class="card clickable ${live ? 'live' : ''}" data-gid="${esc(g.id)}" tabindex="0" role="button" aria-label="Game details: ${esc(g.away.name)} at ${esc(g.home.name)}" style="--a:${g.away.color || '#7c8cff'};--h:${g.home.color || '#3de0c0'};animation-delay:${i * 40}ms">
       <div class="meta"><span>${g.icon} ${esc(g.leagueName)}</span>${pill}</div>
       ${row(g.away, post && homeWin)}
       ${row(g.home, post && awayWin)}
@@ -186,6 +188,7 @@ function renderScores() {
     $('#goTeams').onclick = () => setTab('teams');
     return;
   }
+  if (state.detail) return paintDetail(); // a game is open: the live panel replaces the list
 
   const shown = shownFollows(); // teams hidden by the Autohide settings take their games with them
   if (!shown.length) return showAllHidden('Scores');
@@ -225,7 +228,160 @@ function renderScores() {
       (!live.length && !later.length ? section('Up next', next) : '');
   }
   view.innerHTML = html || `<div class="empty"><h3>No games right now</h3><p>Your teams don't have games today. Check Schedules for what's coming.</p></div>`;
+  view.querySelectorAll('.card[data-gid]').forEach((c) => {
+    c.onclick = () => openDetail(c.dataset.gid);
+    c.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(c.dataset.gid); } };
+  });
 }
+
+/* ---------- Live game panel (click a game in Scores) ---------- */
+// state.detail = { id, tab: 'sum' | 'box' | 'plays', data, error, loading, settled } while a game is open.
+// The header numbers come from the live scoreboard feed (state.games); the line score, scoring summary,
+// box score and plays come from the per-game summary (api.gameDetail), refreshed every 15 s while the game is live.
+const DETAIL_REFRESH_MS = 15000;
+const stopDetailTimer = () => { clearInterval(state.detailTimer); state.detailTimer = null; };
+const detailGame = () => (state.detail ? state.games.find((g) => g.id === state.detail.id) : null);
+
+function openDetail(id) {
+  stopDetailTimer();
+  const d = (state.detail = { id, tab: 'sum', data: null, error: null, loading: true, settled: false });
+  paintDetail();
+  loadDetail();
+  state.detailTimer = setInterval(() => {
+    const g = detailGame();
+    if (state.detail !== d || !g || state.tab !== 'scores') return stopDetailTimer();
+    if (document.hidden) return; // the window is in the tray: don't poll ESPN for nobody
+    if (g.state === 'in' || !d.data || (g.state === 'post' && !d.settled)) loadDetail();
+  }, DETAIL_REFRESH_MS);
+}
+
+function closeDetail() {
+  stopDetailTimer();
+  state.detail = null;
+  if (state.tab === 'scores') renderScores();
+}
+
+async function loadDetail() {
+  const d = state.detail;
+  const g = detailGame();
+  if (!d || !g) return;
+  let r;
+  try { r = await api.gameDetail(g.league, g.eventId); } catch (e) { r = { ok: false, error: e.message }; }
+  if (state.detail !== d) return; // closed or switched while we waited
+  d.loading = false;
+  if (r && r.ok) { d.data = r; d.error = null; if (g.state === 'post') d.settled = true; }
+  else d.error = (r && r.error) || 'ESPN did not answer';
+  if (state.tab === 'scores') paintDetail();
+}
+
+const detailWhen = (p) => [p.period, p.clock].filter(Boolean).join(' ');
+
+function detailHero(g, d) {
+  const post = g.state === 'post', live = g.state === 'in';
+  const t = whenText(g.date);
+  const status = live ? `<span class="pill in"><span class="dot"></span>${esc(g.label)}${g.kind !== 'baseball' && g.clock ? ' · ' + esc(g.clock) : ''}</span>`
+    : post ? `<span class="pill">${esc(g.detail || 'Final')}</span>`
+    : `<span class="pill">${esc(t.day)} · ${esc(t.time)}</span>`;
+  const side = (team, win) => `
+    <div class="dteam ${win ? 'win' : ''}">
+      <img src="${esc(team.logo)}" alt="" onerror="this.style.visibility='hidden'" />
+      <b>${esc(team.name)}</b>
+      <em class="dscore">${live || post ? esc(team.score) : ''}</em>
+    </div>`;
+  let lines = '';
+  const data = d.data;
+  if (data && data.heads && data.heads.length) {
+    const row = (team) => {
+      const info = data.teams.find((x) => x.id === team.id);
+      const cells = data.heads.map((_, i) => `<td>${esc(info && info.lines[i] != null ? info.lines[i] : '')}</td>`).join('');
+      return `<tr><td class="lt"><div class="tm"><img src="${esc(team.logo)}" alt="" onerror="this.style.visibility='hidden'" /><span>${esc(team.abbr)}</span></div></td>${cells}<td class="tot">${esc(team.score)}</td></tr>`;
+    };
+    lines = `<table class="stbl dlines"><thead><tr><th class="tmh"></th>${data.heads.map((h) => `<th>${esc(h)}</th>`).join('')}<th>T</th></tr></thead><tbody>${row(g.away)}${row(g.home)}</tbody></table>`;
+  }
+  return `<section class="dhero" style="--a:${g.away.color || '#7c8cff'};--h:${g.home.color || '#3de0c0'}">
+    <div class="dmeta"><span>${g.icon} ${esc(g.leagueName)}${g.broadcast ? ' · ' + esc(g.broadcast) : ''}</span>${status}</div>
+    <div class="dmatch">${side(g.away, post && g.home.score > g.away.score)}<span class="dat">at</span>${side(g.home, post && g.away.score > g.home.score)}</div>
+    ${lines}
+  </section>`;
+}
+
+function detailSummary(g, d) {
+  const data = d.data;
+  let html = '';
+  // Team stats side by side (shots, hits, rebounds ...)
+  const sa = data.teamStats.find((t) => t.id === g.away.id), sh = data.teamStats.find((t) => t.id === g.home.id);
+  if (sa && sh && sa.stats.length) {
+    const rows = sa.stats.map((s) => {
+      const o = sh.stats.find((x) => x.label === s.label);
+      return o ? `<tr><td class="lt">${esc(s.label)}</td><td>${esc(s.value)}</td><td>${esc(o.value)}</td></tr>` : '';
+    }).join('');
+    if (rows) html += `<h2>Team stats</h2><table class="stbl dstats"><thead><tr><th class="tmh"></th><th>${esc(g.away.abbr)}</th><th>${esc(g.home.abbr)}</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+  html += '<h2>Scoring summary</h2>';
+  html += data.scoring.length
+    ? `<div class="dlist">${data.scoring.map((p) => `
+        <div class="dplay scoring">
+          <span class="dwhen">${esc(detailWhen(p))}</span>
+          <span class="dtext">${p.team ? `<i class="dtag">${esc(p.team)}</i>` : ''}${esc(p.text)}</span>
+          ${p.away !== '' && p.home !== '' ? `<span class="dnow">${esc(g.away.abbr)} ${esc(p.away)} – ${esc(p.home)} ${esc(g.home.abbr)}</span>` : ''}
+        </div>`).join('')}</div>`
+    : `<p class="dnone">${g.state === 'pre' ? "The game hasn't started yet." : 'No scoring yet.'}</p>`;
+  return html;
+}
+
+function detailBox(g, d) {
+  const data = d.data;
+  let html = '';
+  for (const team of [g.away, g.home]) {
+    const p = data.players.find((x) => x.id === team.id);
+    if (!p) continue;
+    html += `<h2>${esc(team.name)}</h2>`;
+    for (const grp of p.groups) {
+      html += `<table class="stbl dbox"><thead><tr><th class="tmh">${esc(grp.name)}</th>${grp.labels.map((l) => `<th>${esc(l)}</th>`).join('')}</tr></thead><tbody>
+        ${grp.rows.map((r) => `<tr><td class="lt">${esc(r.name)}${r.jersey ? ` <small>#${esc(r.jersey)}</small>` : ''}</td>${grp.labels.map((_, i) => `<td>${esc(r.stats[i] != null ? r.stats[i] : '')}</td>`).join('')}</tr>`).join('')}
+        ${grp.totals.length ? `<tr class="dtotal"><td class="lt">Totals</td>${grp.labels.map((_, i) => `<td>${esc(grp.totals[i] != null ? grp.totals[i] : '')}</td>`).join('')}</tr>` : ''}
+      </tbody></table>`;
+    }
+  }
+  return html || `<p class="dnone">${g.state === 'pre' ? "The game hasn't started yet." : "ESPN doesn't have a box score for this game yet."}</p>`;
+}
+
+function detailPlays(g, d) {
+  const list = d.data.plays;
+  if (!list.length) return `<p class="dnone">${g.state === 'pre' ? "The game hasn't started yet." : 'No plays yet.'}</p>`;
+  return `<h2>Recent plays</h2><div class="dlist">${list.map((p) => `
+    <div class="dplay ${p.scoring ? 'scoring' : ''}"><span class="dwhen">${esc(detailWhen(p))}</span><span class="dtext">${p.team ? `<i class="dtag">${esc(p.team)}</i>` : ''}${esc(p.text)}</span></div>`).join('')}</div>`;
+}
+
+function paintDetail() {
+  const d = state.detail;
+  const g = detailGame();
+  if (!d || !g) { state.detail = null; stopDetailTimer(); return renderScores(); } // the game left the feed: back to the list
+  titleEl.textContent = 'Scores';
+  subEl.textContent = `${g.away.name} at ${g.home.name}`;
+  setActions([['sum', 'Summary'], ['box', 'Box score'], ['plays', 'Plays']], d.tab, (k) => { d.tab = k; paintDetail(); },
+    { items: [['back', '← Scores']], current: null, onPick: closeDetail });
+
+  let body;
+  if (!d.data) {
+    body = d.loading ? `<div class="empty"><p>Loading game details…</p></div>`
+      : `<div class="empty"><h3>Details unavailable</h3><p>${esc(d.error || 'ESPN returned nothing for this game right now.')}</p><button class="cta" id="dRetry">Try again</button></div>`;
+  } else {
+    body = d.tab === 'box' ? detailBox(g, d) : d.tab === 'plays' ? detailPlays(g, d) : detailSummary(g, d);
+  }
+  const updated = d.data ? new Date(d.data.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) : '';
+  const foot = d.data
+    ? `<div class="dfoot"><span>${g.state === 'in' ? 'Updates every 15 seconds · ' : ''}Updated ${esc(updated)}${d.error ? ' · refresh failed, showing the last update' : ''}</span>${g.link ? `<button class="rbtn" data-open="${esc(g.link)}">Open on ESPN</button>` : ''}</div>`
+    : '';
+  const top = view.scrollTop; // a live refresh must not throw you back to the top
+  view.innerHTML = detailHero(g, d) + `<div class="dbody">${body}</div>` + foot;
+  view.scrollTop = top;
+  const retry = $('#dRetry');
+  if (retry) retry.onclick = () => { d.loading = true; d.error = null; paintDetail(); loadDetail(); };
+  view.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => api.openLink(b.dataset.open)));
+}
+
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.detail && state.tab === 'scores') closeDetail(); });
 
 /* ---------- Schedules view (day agenda / week / month) ---------- */
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -1111,6 +1267,7 @@ function render() {
 }
 
 function setTab(tab) {
+  if (state.detail) { stopDetailTimer(); state.detail = null; } // leaving Scores (or clicking it again) closes an open game
   state.tab = tab;
   document.querySelectorAll('.nav').forEach((n) => n.classList.toggle('active', n.dataset.view === tab));
   render();

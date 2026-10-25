@@ -624,6 +624,104 @@ function cleanPlayText(t) {
   return s.length > 140 ? s.slice(0, 137).trimEnd() + '…' : s;
 }
 
+/* ---------- Game detail (the panel opened from Scores) ---------- */
+// One normalized object from ESPN's per-game summary: line score, team stats, scoring summary, box score and
+// recent plays. ESPN's shape differs per sport and is undocumented, so every read is defensive and a missing
+// section just comes back empty (the panel then says there is nothing yet) instead of failing the whole view.
+const asArr = (v) => (Array.isArray(v) ? v : []);
+const objs = (v) => asArr(v).filter((x) => x && typeof x === 'object'); // lists of objects: skip null/odd entries
+const asTxt = (v) => (v == null ? '' : String(v)).replace(/\s+/g, ' ').trim();
+const DETAIL_PLAYS = 30, DETAIL_ROWS = 40, DETAIL_STATS = 24;
+
+// Column heading for the Nth period of a line score
+function periodHead(kind, n) {
+  if (kind === 'baseball') return String(n);
+  if (kind === 'hockey') return n <= 3 ? String(n) : n === 4 ? 'OT' : 'SO';
+  return n <= 4 ? String(n) : n === 5 ? 'OT' : `${n - 4}OT`;
+}
+
+function allPlays(data) {
+  let list = objs(data.plays);
+  if (!list.length && data.drives && typeof data.drives === 'object') { // football keeps its plays inside drives
+    list = [...objs(data.drives.previous), data.drives.current].filter((d) => d && typeof d === 'object').flatMap((d) => objs(d.plays));
+  }
+  return list;
+}
+
+function parseGameDetail(l, data) {
+  data = data && typeof data === 'object' ? data : {};
+  const comp = objs(data.header && data.header.competitions)[0] || {};
+  const teams = objs(comp.competitors).map((c) => {
+    const t = c.team || {};
+    return {
+      id: asTxt(t.id || c.id),
+      homeAway: c.homeAway === 'home' ? 'home' : 'away',
+      name: asTxt(t.displayName || t.name),
+      abbr: asTxt(t.abbreviation),
+      score: asTxt(c.score),
+      lines: objs(c.linescores).map((s) => asTxt(s.displayValue != null ? s.displayValue : s.value))
+    };
+  });
+  const abbrOf = (id) => (teams.find((t) => t.id === asTxt(id)) || {}).abbr || '';
+  const periods = Math.max(0, ...teams.map((t) => t.lines.length));
+  const heads = Array.from({ length: periods }, (_, i) => periodHead(l.kind, i + 1));
+
+  const periodText = (p) => asTxt(p && (p.displayValue || (p.number != null ? periodHead(l.kind, Number(p.number)) : '')));
+  const mapPlay = (p) => ({
+    text: cleanPlayText(p.text || p.shortText),
+    period: periodText(p.period),
+    clock: asTxt(p.clock && p.clock.displayValue),
+    team: abbrOf(p.team && p.team.id),
+    away: p.awayScore != null ? asTxt(p.awayScore) : '',
+    home: p.homeScore != null ? asTxt(p.homeScore) : '',
+    scoring: !!p.scoringPlay
+  });
+
+  const plays = allPlays(data);
+  let scoring = objs(data.scoringPlays);
+  if (!scoring.length) scoring = plays.filter((p) => p && p.scoringPlay);
+  const scoringOut = scoring.map(mapPlay).filter((p) => p.text);
+  const recent = plays.map(mapPlay).filter((p) => p.text).slice(-DETAIL_PLAYS).reverse(); // newest first
+
+  const box = data.boxscore || {};
+  const teamStats = objs(box.teams).map((t) => ({
+    id: asTxt(t.team && t.team.id),
+    stats: objs(t.statistics).map((s) => ({ label: asTxt(s.label || s.name), value: asTxt(s.displayValue != null ? s.displayValue : s.value) }))
+      .filter((s) => s.label && s.value).slice(0, DETAIL_STATS)
+  }));
+  const players = objs(box.players).map((p) => ({
+    id: asTxt(p.team && p.team.id),
+    groups: objs(p.statistics).map((g) => {
+      const name = asTxt(g.text || g.name || g.type);
+      return {
+        name: name.charAt(0).toUpperCase() + name.slice(1),
+        labels: asArr(g.labels).map(asTxt),
+        rows: objs(g.athletes).slice(0, DETAIL_ROWS).map((a) => ({
+          name: asTxt(a.athlete && (a.athlete.shortName || a.athlete.displayName)),
+          jersey: asTxt(a.athlete && a.athlete.jersey),
+          stats: asArr(a.stats).map(asTxt)
+        })).filter((r) => r.name),
+        totals: asArr(g.totals).map(asTxt)
+      };
+    }).filter((g) => g.rows.length)
+  })).filter((p) => p.groups.length);
+
+  return { heads, teams, teamStats, scoring: scoringOut, plays: recent, players };
+}
+
+const detailCache = new Map(); // `${league}:${eventId}` -> { at, data }
+async function fetchGameDetail(l, eventId, ttl = 10000) {
+  const ck = `${l.key}:${eventId}`;
+  const hit = detailCache.get(ck);
+  if (hit && Date.now() - hit.at < ttl) return hit.data;
+  const res = await fetch(summaryUrl(l, eventId), { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) throw new Error(`${l.name} game details: HTTP ${res.status}`);
+  const data = { ...parseGameDetail(l, await res.json()), at: Date.now() };
+  detailCache.set(ck, { at: Date.now(), data });
+  if (detailCache.size > 40) detailCache.delete(detailCache.keys().next().value); // keep it small
+  return data;
+}
+
 // The summary feed can trail the scoreboard by a few seconds, so ask again a couple of times before giving up
 const SCORE_DETAIL_DELAYS = [0, 4000, 8000];
 
@@ -884,4 +982,4 @@ class Engine {
   }
 }
 
-module.exports = { Engine, parseEvent, periodInfo, fetchDays, fetchStandings, standingsSnapshot, standingsChanges, parseScoringPlays, playsBetween, cleanPlayText, isPostseason, fetchPlayoffs, followedAlive, playoffsOutcome, fetchOutTeams, isInSeason, fetchRoster, fetchInjuries, parseRoster, parseInjuries };
+module.exports = { Engine, parseEvent, periodInfo, fetchDays, fetchStandings, standingsSnapshot, standingsChanges, parseScoringPlays, playsBetween, cleanPlayText, parseGameDetail, fetchGameDetail, isPostseason, fetchPlayoffs, followedAlive, playoffsOutcome, fetchOutTeams, isInSeason, fetchRoster, fetchInjuries, parseRoster, parseInjuries };
