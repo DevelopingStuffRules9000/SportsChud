@@ -36,9 +36,12 @@ const dayStr = (d) => `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDa
 const standingsUrl = (l) =>
   `https://site.api.espn.com/apis/v2/sports/${l.sport}/${l.league}/standings${l.standingsLevel ? `?level=${l.standingsLevel}` : ''}`;
 
+// Per-game detail (scoring plays, box score, ...). `eventId` is ESPN's own id, without our "league:" prefix
+const summaryUrl = (l, eventId) => `${BASE}/${l.sport}/${l.league}/summary?event=${encodeURIComponent(eventId)}`;
+
 const rosterUrl = (l, teamId) => `${BASE}/${l.sport}/${l.league}/teams/${encodeURIComponent(teamId)}/roster`;
 const injuriesUrl = (l) => `${BASE}/${l.sport}/${l.league}/injuries`;
 
 const teamsUrl = (l) => `${BASE}/${l.sport}/${l.league}/teams?limit=${l.teamsQuery ? 500 : 100}${l.teamsQuery || ''}`;
 
-module.exports = { LEAGUES, scoreboardUrl, standingsUrl, rosterUrl, injuriesUrl, teamsUrl, dayStr };
+module.exports = { LEAGUES, scoreboardUrl, standingsUrl, summaryUrl, rosterUrl, injuriesUrl, teamsUrl, dayStr };

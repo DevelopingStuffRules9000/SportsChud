@@ -1,4 +1,4 @@
-const { LEAGUES, scoreboardUrl, standingsUrl, rosterUrl, injuriesUrl, dayStr } = require('./leagues');
+const { LEAGUES, scoreboardUrl, standingsUrl, summaryUrl, rosterUrl, injuriesUrl, dayStr } = require('./leagues');
 
 const dayCache = new Map(); // `${league}:${YYYYMMDD}` -> { at, events }
 
@@ -158,6 +158,7 @@ function parseEvent(l, ev) {
   const { label, key } = periodInfo(l.kind, st);
   return {
     id: `${l.key}:${ev.id}`,
+    eventId: String(ev.id),
     league: l.key,
     leagueName: l.name,
     icon: l.icon,
@@ -514,6 +515,45 @@ async function fetchInjuries(l, ttl = 300000) {
   return data;
 }
 
+/* ---------- Who scored (details for scoring alerts) ---------- */
+// ESPN's per-game summary lists every scoring play with the running score. Only used to say who scored,
+// so every function here is defensive: anything unexpected just means the alert goes out without detail.
+function parseScoringPlays(data) {
+  let plays = data && Array.isArray(data.scoringPlays) ? data.scoringPlays : null;
+  if (!plays) plays = ((data && Array.isArray(data.plays)) ? data.plays : []).filter((p) => p && p.scoringPlay);
+  return plays
+    .map((p) => ({
+      away: Number(p.awayScore),
+      home: Number(p.homeScore),
+      text: String((p && (p.text || p.shortText)) || '').trim()
+    }))
+    .filter((p) => Number.isFinite(p.away) && Number.isFinite(p.home) && p.text)
+    .sort((a, b) => a.away + a.home - (b.away + b.home));
+}
+
+async function fetchScoringPlays(l, eventId) {
+  const res = await fetch(summaryUrl(l, eventId), { signal: AbortSignal.timeout(4000) });
+  if (!res.ok) throw new Error(`${l.name} summary: HTTP ${res.status}`);
+  return parseScoringPlays(await res.json());
+}
+
+// The plays that account for the score moving from `prev` to `cur`, oldest first. `complete` means the last one
+// lands exactly on the current score, i.e. the summary feed has caught up with the scoreboard feed.
+function playsBetween(plays, prev, cur) {
+  const found = plays.filter((p) => (p.away > prev.away || p.home > prev.home) && p.away <= cur.away && p.home <= cur.home);
+  const last = found[found.length - 1];
+  return { plays: found, complete: !!last && last.away === cur.away && last.home === cur.home };
+}
+
+// ESPN puts season totals in brackets ("Auston Matthews (12) Wrist Shot ..."); drop them and keep it toast-sized
+function cleanPlayText(t) {
+  const s = String(t || '').replace(/\s*\(\d+\)/g, '').replace(/\s+/g, ' ').trim();
+  return s.length > 140 ? s.slice(0, 137).trimEnd() + '…' : s;
+}
+
+// The summary feed can trail the scoreboard by a few seconds, so ask again a couple of times before giving up
+const SCORE_DETAIL_DELAYS = [0, 4000, 8000];
+
 class Engine {
   constructor({ getSettings, notify, onUpdate }) {
     this.getSettings = getSettings;
@@ -524,6 +564,7 @@ class Engine {
     this.closeSent = new Set();
     this.gameBase = new Map(); // game id -> standings snapshot from while the game was live (null while loading)
     this.standJobs = new Set(); // post-game standings checks still waiting for ESPN to count a final
+    this.scoreJobs = new Map(); // game id -> promise of its latest alert that is still waiting on scoring detail
     this.stopped = false;
     this.games = [];
     this.timer = null;
@@ -539,6 +580,39 @@ class Engine {
     clearTimeout(this.timer);
     for (const job of this.standJobs) clearTimeout(job.timer);
     this.standJobs.clear();
+    this.scoreJobs.clear(); // pending detail lookups notice `stopped` when they wake and send nothing
+  }
+
+  // Alerts for one game go out in order. While a scoring alert is still waiting for its detail, anything that
+  // follows it for that game (period end, final) waits behind it, so "Final" never arrives before the last goal.
+  queue(gameId, fn) {
+    const before = this.scoreJobs.get(gameId) || Promise.resolve();
+    const job = before.then(fn).catch(() => {});
+    this.scoreJobs.set(gameId, job);
+    job.then(() => { if (this.scoreJobs.get(gameId) === job) this.scoreJobs.delete(gameId); });
+    return job;
+  }
+
+  sendInOrder(gameId, n) {
+    if (this.scoreJobs.has(gameId)) this.queue(gameId, () => this.notify(n));
+    else this.notify(n);
+  }
+
+  // Who scored, as text lines, or null when ESPN's summary has nothing (yet) for this score change
+  async scoringDetail(g, prev, cur) {
+    const l = LEAGUES.find((x) => x.key === g.league);
+    if (!l || !g.eventId) return null;
+    let best = null;
+    for (const delay of SCORE_DETAIL_DELAYS) {
+      if (delay) await new Promise((r) => setTimeout(r, delay));
+      if (this.stopped) return null;
+      try {
+        const m = playsBetween(await fetchScoringPlays(l, g.eventId), prev, cur);
+        if (m.plays.length) best = m;
+        if (m.complete) break;
+      } catch (_) {} // timeouts and HTTP errors just mean "no detail"
+    }
+    return best ? best.plays.slice(-3).map((p) => cleanPlayText(p.text)).join('\n') : null;
   }
 
   // Standings as they were before this game counted, so the final can be compared against them
@@ -687,10 +761,14 @@ class Engine {
           g.kind === 'baseball' ? (diff > 1 ? `${diff} runs score` : 'Run scores')
           : g.kind === 'football' ? `+${diff} points`
           : 'GOAL!'; // hockey
-        this.notify({
-          title: `${word} ${scorer.name}`,
-          body: `${scoreLine} · ${g.label}${g.state === 'in' && g.kind === 'hockey' ? ' ' + g.clock : ''}`.trim(),
-          gameId: g.id
+        // The line under the title is fixed now (the clock moves on while we wait for ESPN's detail)
+        const head = `${scoreLine} · ${g.label}${g.state === 'in' && g.kind === 'hockey' ? ' ' + g.clock : ''}`.trim();
+        const from = { away: prev.away, home: prev.home };
+        const to = { away: g.away.score, home: g.home.score };
+        this.queue(g.id, async () => {
+          const detail = await this.scoringDetail(g, from, to); // null: send the plain alert as before
+          if (this.stopped) return;
+          this.notify({ title: `${word} ${scorer.name}`, body: detail ? `${detail}\n${head}` : head, gameId: g.id });
         });
       }
 
@@ -698,7 +776,7 @@ class Engine {
       let otFired = false;
       if (g.state === 'in' && prev.state === 'in' && !g.isBreak && isExtra(g) && g.period > (prev.period || 0) && this.wants(followed, 'overtime')) {
         otFired = true;
-        this.notify({
+        this.sendInOrder(g.id, {
           title: g.kind === 'baseball' ? `${g.icon} Extra innings!` : `${g.icon} ${g.label}!`,
           body: `${scoreLine} · ${g.leagueName}`,
           gameId: g.id
@@ -710,7 +788,7 @@ class Engine {
         const isEnd = g.key.startsWith('end') || g.key === 'half';
         const skipBaseball = g.kind === 'baseball' && !/^(Top|Bot)/.test(g.label);
         if (!skipBaseball) {
-          this.notify({
+          this.sendInOrder(g.id, {
             title: isEnd ? g.label : `${g.label} underway`,
             body: `${scoreLine} · ${g.leagueName}`,
             gameId: g.id
@@ -720,7 +798,7 @@ class Engine {
 
       // Final
       if (g.state === 'post' && this.wants(followed, 'final')) {
-        this.notify({ title: `Final · ${g.icon}`, body: scoreLine, gameId: g.id });
+        this.sendInOrder(g.id, { title: `Final · ${g.icon}`, body: scoreLine, gameId: g.id });
       }
 
       // Standings change after the final (independent of the Final alert)
@@ -733,4 +811,4 @@ class Engine {
   }
 }
 
-module.exports = { Engine, parseEvent, periodInfo, fetchDays, fetchStandings, standingsSnapshot, standingsChanges, isPostseason, fetchPlayoffs, followedAlive, isInSeason, fetchRoster, fetchInjuries, parseRoster, parseInjuries };
+module.exports = { Engine, parseEvent, periodInfo, fetchDays, fetchStandings, standingsSnapshot, standingsChanges, parseScoringPlays, playsBetween, cleanPlayText, isPostseason, fetchPlayoffs, followedAlive, isInSeason, fetchRoster, fetchInjuries, parseRoster, parseInjuries };
