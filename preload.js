@@ -23,6 +23,10 @@ contextBridge.exposeInMainWorld('api', {
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
   onUpdate: (cb) => ipcRenderer.on('update:state', (_, u) => cb(u)),
+  setOverlay: (on) => ipcRenderer.invoke('overlay:set', on),
+  overlaySize: (h) => ipcRenderer.invoke('overlay:size', h),
+  showMain: () => ipcRenderer.invoke('main:show'),
+  onOverlay: (cb) => ipcRenderer.on('overlay:state', (_, on) => cb(on)),
   onGames: (cb) => ipcRenderer.on('games:update', (_, g) => cb(g)),
   onActivity: (cb) => ipcRenderer.on('activity', (_, a) => cb(a))
 });

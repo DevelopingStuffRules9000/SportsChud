@@ -233,6 +233,57 @@ async function fetchStandings(l, ttl = 300000) {
   return data;
 }
 
+/* ---------- Standings change alerts ---------- */
+const ordinal = (n) => {
+  const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+};
+
+// Wording for ESPN's clinch markers; anything unknown falls back to showing the marker itself
+const CLINCH_TEXT = {
+  x: 'Clinched a playoff spot',
+  y: 'Clinched the division',
+  z: 'Clinched the top seed',
+  e: 'Eliminated from playoff contention'
+};
+
+// A string that changes when a team's own results (games played, W/L/OTL/T, points) change. Used to tell
+// that ESPN has counted a finished game, because the standings feed lags the final by a few minutes.
+function recordSig(stats) {
+  const keys = ['gamesPlayed', 'wins', 'losses', 'otLosses', 'ties', 'points'];
+  const sig = keys.map((k) => (stats && stats[k] != null ? stats[k] : '')).join('|');
+  return sig.replace(/\|/g, '') ? sig : JSON.stringify(stats || {});
+}
+
+// teamId -> where the team sits in its table right now
+function standingsSnapshot(data) {
+  const snap = new Map();
+  for (const g of (data && data.groups) || []) {
+    g.rows.forEach((r, i) => {
+      if (snap.has(r.teamId)) return;
+      const s = r.stats || {};
+      snap.set(r.teamId, {
+        group: g.name, rank: i + 1, clincher: r.clincher || '',
+        sig: recordSig(s), record: String(s.overall || s.record || '')
+      });
+    });
+  }
+  return snap;
+}
+
+// What moved for one team between two snapshots: a list of short phrases, empty when nothing did
+function standingsChanges(before, after) {
+  if (!before || !after) return [];
+  const out = [];
+  if (before.group === after.group && after.rank !== before.rank) {
+    out.push(`${after.rank < before.rank ? 'Moved up' : 'Dropped'} to ${ordinal(after.rank)} in ${after.group || 'the standings'} (was ${ordinal(before.rank)})`);
+  }
+  if (after.clincher && after.clincher !== before.clincher) {
+    out.push(`${CLINCH_TEXT[after.clincher] || `Now marked "${after.clincher}"`} (${after.clincher})`);
+  }
+  return out;
+}
+
 /* ---------- Playoffs ---------- */
 const postCache = new Map(); // league key -> { at, on }
 const seasonType = (v) => (v && typeof v === 'object' ? Number(v.type) : Number(v));
@@ -471,16 +522,72 @@ class Engine {
     this.prev = new Map();
     this.reminded = new Set();
     this.closeSent = new Set();
+    this.gameBase = new Map(); // game id -> standings snapshot from while the game was live (null while loading)
+    this.standJobs = new Set(); // post-game standings checks still waiting for ESPN to count a final
+    this.stopped = false;
     this.games = [];
     this.timer = null;
   }
 
   start() {
+    this.stopped = false;
     this.tick();
   }
 
   stop() {
+    this.stopped = true;
     clearTimeout(this.timer);
+    for (const job of this.standJobs) clearTimeout(job.timer);
+    this.standJobs.clear();
+  }
+
+  // Standings as they were before this game counted, so the final can be compared against them
+  async captureGameBase(g) {
+    this.gameBase.set(g.id, null);
+    try {
+      const l = LEAGUES.find((x) => x.key === g.league);
+      this.gameBase.set(g.id, standingsSnapshot(await fetchStandings(l, 300000)));
+    } catch (_) {
+      this.gameBase.delete(g.id); // try again on the next poll
+    }
+  }
+
+  // After a final: ESPN's standings lag the game by minutes, so poll until a followed team's record
+  // changes, then alert once for anything that moved (rank in its table, a clinch marker). Gives up after ~90 min.
+  async watchStandings(g, followed, base) {
+    const l = LEAGUES.find((x) => x.key === g.league);
+    const teams = followed.filter((f) => f.alerts && f.alerts.standings).map((f) => ({ id: String(f.teamId), name: f.name }));
+    if (!l || !base || !teams.length || this.stopped) return;
+    try { if (await isPostseason(l)) return; } catch (_) {} // seeds barely move in the playoffs
+    const job = { teams, tries: 0, timer: null };
+    this.standJobs.add(job);
+    const step = async () => {
+      job.tries++;
+      let data = null;
+      try { data = await fetchStandings(l, 90000); } catch (_) {}
+      if (this.stopped) return;
+      if (data) {
+        const now = standingsSnapshot(data);
+        const waiting = [];
+        for (const t of job.teams) {
+          const was = base.get(t.id), cur = now.get(t.id);
+          if (!was || !cur) continue; // not in the table, nothing to compare
+          if (cur.sig === was.sig) { waiting.push(t); continue; } // ESPN hasn't counted the game yet
+          const bits = standingsChanges(was, cur);
+          if (bits.length) {
+            this.notify({
+              title: `${g.icon} Standings · ${t.name}`,
+              body: bits.join(' · ') + (cur.record ? ` · ${cur.record}` : ''),
+              gameId: g.id
+            });
+          }
+        }
+        job.teams = waiting;
+      }
+      if (!job.teams.length || job.tries >= 45) { this.standJobs.delete(job); return; }
+      job.timer = setTimeout(step, 120000);
+    };
+    job.timer = setTimeout(step, 90000);
   }
 
   async tick() {
@@ -558,6 +665,9 @@ class Engine {
       });
     }
 
+    // Standings alerts: remember the table while the game is live (also covers opening the app mid-game)
+    if (g.state === 'in' && !this.gameBase.has(g.id) && this.wants(followed, 'standings')) this.captureGameBase(g);
+
     if (!prev) return; // first sighting: don't fire retroactive alerts
 
     // Game start
@@ -612,8 +722,15 @@ class Engine {
       if (g.state === 'post' && this.wants(followed, 'final')) {
         this.notify({ title: `Final · ${g.icon}`, body: scoreLine, gameId: g.id });
       }
+
+      // Standings change after the final (independent of the Final alert)
+      if (g.state === 'post') {
+        const base = this.gameBase.get(g.id);
+        this.gameBase.delete(g.id);
+        if (base && this.wants(followed, 'standings')) this.watchStandings(g, followed, base);
+      }
     }
   }
 }
 
-module.exports = { Engine, parseEvent, periodInfo, fetchDays, fetchStandings, isPostseason, fetchPlayoffs, followedAlive, isInSeason, fetchRoster, fetchInjuries, parseRoster, parseInjuries };
+module.exports = { Engine, parseEvent, periodInfo, fetchDays, fetchStandings, standingsSnapshot, standingsChanges, isPostseason, fetchPlayoffs, followedAlive, isInSeason, fetchRoster, fetchInjuries, parseRoster, parseInjuries };

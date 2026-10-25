@@ -10,7 +10,8 @@ const ALERT_TYPES = [
   ['score', 'Scoring'],
   ['close', 'Close game'],
   ['overtime', 'Overtime'],
-  ['final', 'Final']
+  ['final', 'Final'],
+  ['standings', 'Standings']
 ];
 
 const state = {
@@ -836,12 +837,14 @@ function renderSettings() {
     ['launchAtStartup', 'Launch at startup', 'Open SportsChud automatically when you sign in to Windows.'],
     ['startSilently', 'Start silently', 'On startup, run in the background with no window. Open it from the tray icon. Needs "Keep running in tray".'],
     ['keepInTray', 'Keep running in tray', 'Closing the window hides it to the tray so alerts keep coming. Quit from the tray icon.'],
+    ['overlayEnabled', 'Mini scoreboard', 'A small always-on-top window with the score and clock of your live games. Drag it anywhere; it remembers where you left it. Also in the tray menu.'],
     ['checkForUpdates', 'Check for updates automatically', 'Looks for a newer SportsChud on GitHub at startup and every few hours. It never installs anything until you click Install.']
   ];
   const autohide = [
     ['playoffsAutoHide', 'Autohide Playoffs', 'Only show the Playoffs tab while one of your teams is still alive in a postseason. It disappears if your teams missed the playoffs or are eliminated. Turn off to always show it.'],
     ['activityAutoHide', 'Autohide Activity', 'Only show the Activity tab once the first alert of the session has been sent. Turn off to always show it.'],
-    ['hideOffSeason', 'Autohide out of season sports', 'Leave leagues with no games in the next week and a half out of Teams, Standings, Injuries and Roster. Alerts for teams you follow keep working. Turn off to always list every league.']
+    ['hideOffSeason', 'Autohide out of season sports', 'Leave leagues with no games in the next week and a half out of Teams, Standings, Injuries and Roster. Alerts for teams you follow keep working. Turn off to always list every league.'],
+    ['overlayAutoHide', 'Autohide Mini scoreboard', 'Only show the mini scoreboard while one of your teams is playing a live game. Turn off to keep it on screen with a "No live games" message. Needs "Mini scoreboard" turned on.']
   ];
   const isOn = (k) => (DEFAULT_ON.includes(k) ? st[k] !== false : !!st[k]);
   const row = ([k, title, desc]) => `
@@ -871,6 +874,12 @@ function renderSettings() {
   view.querySelectorAll('[data-set]').forEach((b) => {
     b.onclick = async () => {
       const k = b.dataset.set;
+      if (k === 'overlayEnabled') {
+        // The main process owns this one (the tray menu changes it too), so ask it rather than saving it here
+        st[k] = await api.setOverlay(!isOn(k));
+        renderSettings();
+        return;
+      }
       st[k] = !isOn(k);
       if (k === 'startSilently' && st[k]) st.keepInTray = true;   // silent start needs the tray
       if (k === 'keepInTray' && !st[k]) st.startSilently = false; // and can't run without it
@@ -1089,6 +1098,11 @@ $('#test').onclick = () => api.testNotification();
   api.onGames((g) => {
     state.games = g;
     if (state.tab === 'scores') renderScores();
+  });
+  // The mini scoreboard was switched from the tray menu or closed with its own ✕
+  api.onOverlay((on) => {
+    state.settings.overlayEnabled = on;
+    if (state.tab === 'settings') renderSettings();
   });
   api.onActivity((a) => {
     state.activity.unshift(a);

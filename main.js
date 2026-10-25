@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Notification, shell, Tray, Menu, nativeImage, session } = require('electron');
+const { app, BrowserWindow, ipcMain, Notification, shell, Tray, Menu, nativeImage, session, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { LEAGUES, teamsUrl, dayStr } = require('./leagues');
@@ -6,14 +6,14 @@ const { Engine, parseEvent, fetchDays, fetchStandings, isPostseason, fetchPlayof
 
 const { Updater } = require('./updater');
 
-const DEFAULT_ALERTS = { reminder: true, start: true, period: true, score: true, close: true, overtime: true, final: true };
+const DEFAULT_ALERTS = { reminder: true, start: true, period: true, score: true, close: true, overtime: true, final: true, standings: true };
 const ICON = path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
 let win;
 let tray = null;
 let quitting = false;
 let resetting = false;
 const startHidden = process.argv.includes('--hidden');
-let settings = { follows: [], reminderMinutes: 15, launchAtStartup: false, startSilently: false, keepInTray: true, playoffsAutoHide: true, hideOffSeason: false, activityAutoHide: true, checkForUpdates: true, groupBy: 'team', navOrder: null, navLocked: true };
+let settings = { follows: [], reminderMinutes: 15, launchAtStartup: false, startSilently: false, keepInTray: true, playoffsAutoHide: true, hideOffSeason: false, activityAutoHide: true, checkForUpdates: true, groupBy: 'team', navOrder: null, navLocked: true, overlayEnabled: false, overlayAutoHide: false, overlayBounds: null };
 const activity = [];
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 
@@ -147,16 +147,120 @@ function ensureTray() {
     const img = nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon.png')).resize({ width: 16, height: 16 });
     tray = new Tray(img);
     tray.setToolTip('SportsChud');
-    tray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Open SportsChud', click: () => showWindow() },
-      { type: 'separator' },
-      { label: 'Quit', click: () => { quitting = true; app.quit(); } }
-    ]));
+    buildTrayMenu();
     tray.on('click', () => showWindow());
     tray.on('double-click', () => showWindow());
   } catch (err) {
     console.error('[tray] could not create tray icon:', err.message);
   }
+}
+
+// Rebuilt whenever the mini scoreboard is switched on or off so its checkbox stays right
+function buildTrayMenu() {
+  if (!tray) return;
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open SportsChud', click: () => showWindow() },
+    { label: 'Mini scoreboard', type: 'checkbox', checked: !!settings.overlayEnabled, click: (item) => setOverlayEnabled(item.checked) },
+    { type: 'separator' },
+    { label: 'Quit', click: () => { quitting = true; app.quit(); } }
+  ]));
+}
+
+/* ---------- Mini scoreboard (always-on-top overlay) ---------- */
+// A small frameless window that lists the followed games that are live right now. The main process owns
+// whether it is on and where it sits (settings.overlayEnabled / overlayBounds), because the tray menu and
+// dragging both change them; 'settings:save' keeps the renderer's copy from overwriting those two keys.
+const OVERLAY_W = 270;
+let overlayWin = null;
+let overlayMoveTimer = null;
+
+const overlayAlive = () => !!overlayWin && !overlayWin.isDestroyed();
+const anyLiveGame = () => engine.games.some((g) => g.state === 'in');
+
+// Where to open: the saved spot if it is still on a connected screen, otherwise the top-right corner
+function overlayStartPosition() {
+  const s = settings.overlayBounds;
+  if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) {
+    const visible = screen.getAllDisplays().some((d) => {
+      const a = d.workArea;
+      return s.x >= a.x - OVERLAY_W + 40 && s.x <= a.x + a.width - 40 && s.y >= a.y && s.y <= a.y + a.height - 40;
+    });
+    if (visible) return { x: Math.round(s.x), y: Math.round(s.y) };
+  }
+  const a = screen.getPrimaryDisplay().workArea;
+  return { x: a.x + a.width - OVERLAY_W - 16, y: a.y + 16 };
+}
+
+function createOverlay() {
+  if (overlayAlive()) return;
+  overlayWin = new BrowserWindow({
+    ...overlayStartPosition(),
+    width: OVERLAY_W,
+    height: 120, // the page reports its real height once it has drawn
+    useContentSize: true,
+    frame: false,
+    transparent: true,
+    hasShadow: false,
+    resizable: false,
+    maximizable: false,
+    minimizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    show: false,
+    alwaysOnTop: true,
+    icon: ICON,
+    title: 'SportsChud Scoreboard',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true
+    }
+  });
+  overlayWin.setAlwaysOnTop(true, 'screen-saver'); // stays above borderless-fullscreen video and games too
+  overlayWin.removeMenu();
+  overlayWin.loadFile(path.join(__dirname, 'renderer', 'overlay.html'));
+  overlayWin.once('ready-to-show', () => updateOverlayVisibility());
+  overlayWin.on('moved', () => {
+    clearTimeout(overlayMoveTimer);
+    overlayMoveTimer = setTimeout(() => {
+      if (!overlayAlive()) return;
+      const [x, y] = overlayWin.getPosition();
+      settings.overlayBounds = { x, y };
+      saveSettings();
+    }, 300);
+  });
+  // Closed by the user (for example Alt+F4 while it has focus): treat that as turning it off
+  overlayWin.on('closed', () => {
+    clearTimeout(overlayMoveTimer);
+    overlayWin = null;
+    if (!quitting && settings.overlayEnabled) setOverlayEnabled(false);
+  });
+}
+
+// Closes it from our side without that counting as the user turning it off
+function closeOverlay() {
+  clearTimeout(overlayMoveTimer);
+  if (!overlayAlive()) return;
+  const w = overlayWin;
+  overlayWin = null;
+  w.removeAllListeners('closed');
+  w.destroy();
+}
+
+// Single place that decides whether the overlay exists and is showing. With autohide on it only shows
+// while a followed game is live; it appears without taking focus from whatever you are doing.
+function updateOverlayVisibility() {
+  if (!settings.overlayEnabled) return closeOverlay();
+  if (!overlayAlive()) return createOverlay();
+  if (settings.overlayAutoHide && !anyLiveGame()) overlayWin.hide();
+  else if (!overlayWin.isVisible()) overlayWin.showInactive();
+}
+
+function setOverlayEnabled(on) {
+  settings.overlayEnabled = !!on;
+  saveSettings();
+  updateOverlayVisibility();
+  buildTrayMenu();
+  if (win && !win.isDestroyed()) win.webContents.send('overlay:state', settings.overlayEnabled);
 }
 
 // Schedule for followed teams over any date range. ESPN only answers one day per request,
@@ -206,6 +310,8 @@ const engine = new Engine({
   notify,
   onUpdate: (games) => {
     if (win && !win.isDestroyed()) win.webContents.send('games:update', games);
+    if (overlayAlive()) overlayWin.webContents.send('games:update', games);
+    updateOverlayVisibility(); // autohide shows/hides it as games start and end
   }
 });
 
@@ -252,6 +358,9 @@ function createWindow(forceShow = false) {
       win.hide();
     }
   });
+  // Only reached when the window really closes (keepInTray off or quitting). Close the overlay too, or its
+  // open window would keep the app running with nothing else on screen.
+  win.on('closed', () => closeOverlay());
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   applyTaskbarDetails();
 }
@@ -279,6 +388,7 @@ app.whenReady().then(() => {
   createWindow();
   engine.start();
   updater.start();
+  updateOverlayVisibility(); // reopen the mini scoreboard if it was left on
 
   ipcMain.handle('update:state', () => ({ ...updater.state }));
   ipcMain.handle('update:check', () => updater.check({ manual: true }));
@@ -288,12 +398,29 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:get', () => settings);
   ipcMain.handle('settings:save', (_, next) => {
     if (resetting) return settings;
+    // On/off and position belong to the main process (tray menu, dragging): keep them even if the
+    // renderer's copy of the settings is out of date
+    next.overlayEnabled = settings.overlayEnabled;
+    next.overlayBounds = settings.overlayBounds;
     settings = next;
     saveSettings();
     applyStartup();
+    updateOverlayVisibility(); // the autohide switch may have changed
     engine.tick();
     return settings;
   });
+  ipcMain.handle('overlay:set', (_, on) => { setOverlayEnabled(on); return settings.overlayEnabled; });
+  // The overlay page reports its content height so the window hugs the list of games
+  ipcMain.handle('overlay:size', (_, h) => {
+    if (!overlayAlive() || !Number.isFinite(h)) return;
+    const height = Math.min(Math.max(Math.round(h), 48), 640);
+    overlayWin.setContentSize(OVERLAY_W, height);
+    // growing near the bottom edge of the screen would push it off: nudge it back up
+    const b = overlayWin.getBounds();
+    const a = screen.getDisplayMatching(b).workArea;
+    if (b.y + b.height > a.y + a.height) overlayWin.setPosition(b.x, Math.max(a.y, a.y + a.height - b.height));
+  });
+  ipcMain.handle('main:show', () => showWindow());
   ipcMain.handle('open:link', (_, url) => {
     if (typeof url === 'string' && /^https:\/\//.test(url)) shell.openExternal(url);
   });
@@ -302,7 +429,8 @@ app.whenReady().then(() => {
   ipcMain.handle('app:reset', async () => {
     resetting = true;
     engine.stop();
-    settings = { follows: [], reminderMinutes: 15, launchAtStartup: false, startSilently: false, keepInTray: true, playoffsAutoHide: true, hideOffSeason: false, activityAutoHide: true, checkForUpdates: true, groupBy: 'team', navOrder: null, navLocked: true };
+    settings = { follows: [], reminderMinutes: 15, launchAtStartup: false, startSilently: false, keepInTray: true, playoffsAutoHide: true, hideOffSeason: false, activityAutoHide: true, checkForUpdates: true, groupBy: 'team', navOrder: null, navLocked: true, overlayEnabled: false, overlayAutoHide: false, overlayBounds: null };
+    closeOverlay();
     applyStartup(); // removes the start-at-login entry
     try { await session.defaultSession.clearStorageData(); await session.defaultSession.clearCache(); } catch (_) {}
     const legacy = path.join(app.getPath('appData'), 'Gametime', 'settings.json');
@@ -388,7 +516,8 @@ app.whenReady().then(() => {
     return teams.sort((a, b) => a.name.localeCompare(b.name));
   });
 
-  app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
+  // (the mini scoreboard counts as a window too, so check the main window itself)
+  app.on('activate', () => (!win || win.isDestroyed()) && createWindow());
 });
 
 app.on('before-quit', () => { quitting = true; });

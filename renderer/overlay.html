@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SportsChud Scoreboard</title>
+  <link rel="stylesheet" href="overlay.css" />
+</head>
+<body>
+  <div class="card" id="card">
+    <header class="bar">
+      <button class="brand" id="open" title="Open SportsChud"><img class="mark" src="icon.png" alt="" /><span>Sports Chud</span></button>
+      <button class="x" id="close" title="Hide the mini scoreboard" aria-label="Hide the mini scoreboard">✕</button>
+    </header>
+    <div id="games"></div>
+  </div>
+  <script src="overlay.js"></script>
+</body>
+</html>
