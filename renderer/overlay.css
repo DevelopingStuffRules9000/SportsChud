@@ -1,53 +1,81 @@
 /* Mini scoreboard: a small always-on-top window (see "Mini scoreboard" in main.js).
-   The window is transparent, so the card draws the rounded background itself. */
+   Same look as the app (colors from styles.css). The window is resizable in width: overlay.js sets --s from the
+   window width (1 = the default 270 px) and everything below is in rem, so text, logos and spacing scale together. */
 :root {
+  --s: 1;
+  --bg: #1c1c1c;
   --text: #f3f4ff;
   --muted: #98a2d6;
   --line: rgba(255, 255, 255, 0.12);
+  --orange: #ff8a2a;
   --amber: #ffc24d;
   --live: #ff5a6e;
   font-family: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+  font-size: calc(16px * var(--s));
 }
 
 * { box-sizing: border-box; margin: 0; }
-html, body { background: transparent; overflow: hidden; }
+html, body { background: var(--bg); overflow: hidden; }
 body { color: var(--text); -webkit-font-smoothing: antialiased; user-select: none; }
 
-/* The whole card drags the window; only the buttons are clickable */
+/* The edge ring takes no drag so the window can be resized from its edges; the card inside drags the window */
+#frame { padding: 4px; -webkit-app-region: no-drag; }
 .card {
   -webkit-app-region: drag;
   width: 100%;
-  background: rgba(24, 24, 28, 0.95);
+  background: var(--bg);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 0.75rem;
   overflow: hidden;
 }
 button { -webkit-app-region: no-drag; font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
 
-.bar { display: flex; align-items: center; justify-content: space-between; padding: 7px 8px 6px 8px; }
+/* Title bar, like the app's sidebar brand */
+.bar { display: flex; align-items: center; justify-content: space-between; padding: 0.4rem 0.5rem 0.4rem 0.5rem; background: rgba(0, 0, 0, 0.22); border-bottom: 1px solid var(--line); }
 .brand {
-  display: flex; align-items: center; gap: 7px; padding: 3px 6px; border-radius: 8px;
-  font-weight: 800; font-size: 11px; letter-spacing: 0.6px; text-transform: uppercase; color: var(--muted);
+  display: flex; align-items: center; gap: 0.45rem; padding: 0.2rem 0.4rem; border-radius: 0.5rem;
+  font-weight: 800; font-size: 0.75rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted);
 }
 .brand:hover { color: var(--text); background: rgba(255, 255, 255, 0.08); }
-.mark { width: 16px; height: 16px; border-radius: 4px; }
-.x { width: 22px; height: 22px; border-radius: 7px; font-size: 11px; color: var(--muted); }
-.x:hover { color: var(--text); background: rgba(255, 255, 255, 0.1); }
+.mark { width: 1.1rem; height: 1.1rem; border-radius: 0.28rem; }
+.x { width: 1.45rem; height: 1.45rem; border-radius: 0.45rem; font-size: 0.72rem; color: var(--muted); }
+.x:hover { color: var(--live); background: rgba(255, 90, 110, 0.12); }
 
-/* One block per live game: two team lines on the left, period and clock on the right */
-.g { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 8px 12px 9px; border-top: 1px solid var(--line); }
-.t { display: flex; align-items: center; gap: 7px; height: 23px; }
-.t img { width: 18px; height: 18px; object-fit: contain; flex: none; }
-.ab { min-width: 36px; font-size: 13px; font-weight: 700; letter-spacing: 0.3px; color: var(--muted); }
+#games { display: flex; flex-direction: column; gap: 0.45rem; padding: 0.45rem; }
+
+/* One glass card per live game, like the app's game cards: each team's color glows in a corner */
+.g {
+  position: relative; overflow: hidden; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0.6rem;
+  padding: 0.5rem 0.7rem 0.55rem; border-radius: 0.9rem;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.03));
+  border: 1px solid rgba(255, 138, 90, 0.6); /* live, as on the Scores cards */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), inset 0 -10px 24px -14px rgba(0, 0, 0, 0.4);
+}
+.g::before {
+  content: ''; position: absolute; inset: 0; z-index: 0; opacity: 0.6; pointer-events: none;
+  background:
+    radial-gradient(11rem 7rem at 0% 0%, color-mix(in srgb, var(--a, #7c8cff) 42%, transparent), transparent 70%),
+    radial-gradient(11rem 7rem at 100% 100%, color-mix(in srgb, var(--h, #3de0c0) 42%, transparent), transparent 70%);
+}
+.g > * { position: relative; z-index: 1; }
+
+.t { display: flex; align-items: center; gap: 0.45rem; height: 1.5rem; }
+.t img { width: 1.2rem; height: 1.2rem; object-fit: contain; flex: none; filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.45)); }
+.ab { min-width: 2.3rem; font-size: 0.85rem; font-weight: 700; letter-spacing: 0.02em; color: var(--muted); }
 .t.fol .ab { color: var(--amber); }
-.sc { margin-left: auto; min-width: 24px; text-align: right; font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--muted); }
+.sc { margin-left: auto; min-width: 1.5rem; text-align: right; font-size: 1.1rem; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--muted); text-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); }
 .sc.lead { color: var(--text); }
 
-.st { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; min-width: 56px; font-size: 11px; font-weight: 700; }
-.lbl { display: flex; align-items: center; gap: 5px; color: var(--live); white-space: nowrap; }
-.clk { color: var(--text); font-size: 13px; font-variant-numeric: tabular-nums; }
-.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); animation: pulse 1.4s infinite; }
+.st { display: flex; flex-direction: column; align-items: flex-end; gap: 0.2rem; min-width: 3.4rem; font-size: 0.72rem; font-weight: 700; }
+/* the app's LIVE pill */
+.lbl {
+  display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0.55rem; border-radius: 999px; white-space: nowrap;
+  background: linear-gradient(135deg, rgba(255, 90, 110, 0.32), rgba(255, 138, 42, 0.28)); color: #ffd0d0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+.clk { color: var(--text); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.dot { width: 0.45rem; height: 0.45rem; border-radius: 50%; background: var(--live); animation: pulse 1.4s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-.empty { padding: 9px 12px 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
-.empty b { display: block; margin-bottom: 2px; font-size: 13px; color: var(--text); }
+.empty { padding: 0.35rem 0.5rem 0.5rem; font-size: 0.78rem; color: var(--muted); }
+.empty b { display: block; margin-bottom: 0.15rem; font-size: 0.85rem; color: var(--text); }

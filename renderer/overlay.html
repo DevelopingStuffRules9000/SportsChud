@@ -9,12 +9,15 @@
   <link rel="stylesheet" href="overlay.css" />
 </head>
 <body>
-  <div class="card" id="card">
-    <header class="bar">
-      <button class="brand" id="open" title="Open SportsChud"><img class="mark" src="icon.png" alt="" /><span>Sports Chud</span></button>
-      <button class="x" id="close" title="Hide the mini scoreboard" aria-label="Hide the mini scoreboard">✕</button>
-    </header>
-    <div id="games"></div>
+  <!-- #frame: a thin no-drag edge around the card, so the window's resize edges are never covered by the drag area -->
+  <div id="frame">
+    <div class="card" id="card">
+      <header class="bar">
+        <button class="brand" id="open" title="Open SportsChud"><img class="mark" src="icon.png" alt="" /><span>Sports Chud</span></button>
+        <button class="x" id="close" title="Hide the mini scoreboard" aria-label="Hide the mini scoreboard">✕</button>
+      </header>
+      <div id="games"></div>
+    </div>
   </div>
   <script src="overlay.js"></script>
 </body>

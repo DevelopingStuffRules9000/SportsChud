@@ -26,7 +26,7 @@ function liveBlock(g) {
       <span class="ab">${esc(t.abbr)}</span>
       <b class="sc ${t.score > other ? 'lead' : ''}">${esc(t.score)}</b>
     </div>`;
-  return `<div class="g">
+  return `<div class="g" style="--a:${esc(g.away.color || '#7c8cff')};--h:${esc(g.home.color || '#3de0c0')}">
     <div class="teams">${team(g.away, home)}${team(g.home, away)}</div>
     <div class="st"><span class="lbl"><i class="dot"></i>${esc(periodText(g))}</span>${clock ? `<span class="clk">${esc(clock)}</span>` : ''}</div>
   </div>`;
@@ -57,24 +57,34 @@ async function loadFollows() {
   try { follows = (await api.getSettings()).follows || []; } catch (_) {}
 }
 
-// Tell main.js how tall the content is so the window hugs it
+// The window is resizable in width. 1 = the default width (270 px); text, logos and spacing are all in rem, so
+// setting --s scales the whole page. The min and max keep it readable (main.js limits the width to 220-640 px).
+const BASE_W = 270;
+function applyScale() {
+  const s = Math.min(2.4, Math.max(0.8, window.innerWidth / BASE_W));
+  document.documentElement.style.setProperty('--s', String(Math.round(s * 1000) / 1000));
+}
+
+// Tell main.js how tall the content is so the window hugs it (its height always follows the content)
 let sizeQueued = false;
 function reportSize() {
   if (sizeQueued) return;
   sizeQueued = true;
   requestAnimationFrame(() => {
     sizeQueued = false;
-    api.overlaySize(Math.ceil($('#card').getBoundingClientRect().height));
+    api.overlaySize(Math.ceil($('#frame').getBoundingClientRect().height));
   });
 }
 
 (async function init() {
   $('#open').onclick = () => api.showMain();
   $('#close').onclick = () => api.setOverlay(false);
+  applyScale();
+  window.addEventListener('resize', applyScale);
   await loadFollows();
   try { games = await api.getGames(); } catch (_) {}
   render();
-  new ResizeObserver(reportSize).observe($('#card'));
+  new ResizeObserver(reportSize).observe($('#frame'));
   reportSize();
   api.onGames(async (g) => {
     games = g;

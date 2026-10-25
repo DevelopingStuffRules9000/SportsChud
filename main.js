@@ -183,13 +183,25 @@ function buildTrayMenu() {
 
 /* ---------- Mini scoreboard (always-on-top overlay) ---------- */
 // A small frameless window that lists the followed games that are live right now. The main process owns
-// whether it is on and where it sits (settings.overlayEnabled / overlayBounds), because the tray menu and
-// dragging both change them; 'settings:save' keeps the renderer's copy from overwriting those two keys.
-const OVERLAY_W = 270;
+// whether it is on and where it sits and how wide it is (settings.overlayEnabled / overlayBounds = { x, y, width }),
+// because the tray menu, dragging and resizing all change them; 'settings:save' keeps the renderer's copy from
+// overwriting those two keys.
+// The window is opaque, not transparent: Electron 33 can't resize a transparent window on Windows. Only the width
+// is user-resizable; the page scales its content with the width and the height always hugs the content.
+const OVERLAY_W = 270;      // default width
+const OVERLAY_MIN_W = 220;
+const OVERLAY_MAX_W = 640;
+const OVERLAY_BG = '#1c1c1c'; // the app's own background (--bg in styles.css)
 let overlayWin = null;
 let overlayMoveTimer = null;
 
 const overlayAlive = () => !!overlayWin && !overlayWin.isDestroyed();
+const clampOverlayW = (w) => Math.min(OVERLAY_MAX_W, Math.max(OVERLAY_MIN_W, Math.round(w)));
+// The remembered width, or the default
+const overlayWidth = () => {
+  const w = settings.overlayBounds && Number(settings.overlayBounds.width);
+  return Number.isFinite(w) && w > 0 ? clampOverlayW(w) : OVERLAY_W;
+};
 const anyLiveGame = () => engine.games.some((g) => g.state === 'in');
 
 // Where to open: the saved spot if it is still on a connected screen, otherwise the top-right corner
@@ -198,25 +210,26 @@ function overlayStartPosition() {
   if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) {
     const visible = screen.getAllDisplays().some((d) => {
       const a = d.workArea;
-      return s.x >= a.x - OVERLAY_W + 40 && s.x <= a.x + a.width - 40 && s.y >= a.y && s.y <= a.y + a.height - 40;
+      return s.x >= a.x - overlayWidth() + 40 && s.x <= a.x + a.width - 40 && s.y >= a.y && s.y <= a.y + a.height - 40;
     });
     if (visible) return { x: Math.round(s.x), y: Math.round(s.y) };
   }
   const a = screen.getPrimaryDisplay().workArea;
-  return { x: a.x + a.width - OVERLAY_W - 16, y: a.y + 16 };
+  return { x: a.x + a.width - overlayWidth() - 16, y: a.y + 16 };
 }
 
 function createOverlay() {
   if (overlayAlive()) return;
   overlayWin = new BrowserWindow({
     ...overlayStartPosition(),
-    width: OVERLAY_W,
+    width: overlayWidth(),
     height: 120, // the page reports its real height once it has drawn
+    minWidth: OVERLAY_MIN_W,
+    maxWidth: OVERLAY_MAX_W,
     useContentSize: true,
     frame: false,
-    transparent: true,
-    hasShadow: false,
-    resizable: false,
+    backgroundColor: OVERLAY_BG, // opaque and the same charcoal as the app (no white flash while it loads)
+    resizable: true,
     maximizable: false,
     minimizable: false,
     fullscreenable: false,
@@ -234,15 +247,21 @@ function createOverlay() {
   overlayWin.removeMenu();
   overlayWin.loadFile(path.join(__dirname, 'renderer', 'overlay.html'));
   overlayWin.once('ready-to-show', () => updateOverlayVisibility());
-  overlayWin.on('moved', () => {
+  // Remember where it is and how wide, a moment after dragging or resizing stops
+  const rememberBounds = () => {
     clearTimeout(overlayMoveTimer);
     overlayMoveTimer = setTimeout(() => {
       if (!overlayAlive()) return;
       const [x, y] = overlayWin.getPosition();
-      settings.overlayBounds = { x, y };
+      const width = clampOverlayW(overlayWin.getContentSize()[0]);
+      const old = settings.overlayBounds || {};
+      if (old.x === x && old.y === y && old.width === width) return; // nothing changed (height-only resizes)
+      settings.overlayBounds = { x, y, width };
       saveSettings();
     }, 300);
-  });
+  };
+  overlayWin.on('moved', rememberBounds);
+  overlayWin.on('resize', rememberBounds);
   // Closed by the user (for example Alt+F4 while it has focus): treat that as turning it off
   overlayWin.on('closed', () => {
     clearTimeout(overlayMoveTimer);
@@ -435,11 +454,18 @@ app.whenReady().then(() => {
   // The overlay page reports its content height so the window hugs the list of games
   ipcMain.handle('overlay:size', (_, h) => {
     if (!overlayAlive() || !Number.isFinite(h)) return;
-    const height = Math.min(Math.max(Math.round(h), 48), 640);
-    overlayWin.setContentSize(OVERLAY_W, height);
+    const b0 = overlayWin.getBounds();
+    const a = screen.getDisplayMatching(b0).workArea;
+    const height = Math.min(Math.max(Math.round(h), 48), a.height);
+    // The height always follows the content, so only the width can be dragged: unlock, resize, lock the height again
+    const [w] = overlayWin.getContentSize();
+    overlayWin.setMinimumSize(OVERLAY_MIN_W, 0);
+    overlayWin.setMaximumSize(OVERLAY_MAX_W, 0);
+    overlayWin.setContentSize(clampOverlayW(w), height);
+    overlayWin.setMinimumSize(OVERLAY_MIN_W, height);
+    overlayWin.setMaximumSize(OVERLAY_MAX_W, height);
     // growing near the bottom edge of the screen would push it off: nudge it back up
     const b = overlayWin.getBounds();
-    const a = screen.getDisplayMatching(b).workArea;
     if (b.y + b.height > a.y + a.height) overlayWin.setPosition(b.x, Math.max(a.y, a.y + a.height - b.height));
   });
   ipcMain.handle('main:show', () => showWindow());
