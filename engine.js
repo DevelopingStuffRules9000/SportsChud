@@ -18,10 +18,14 @@ async function fetchDays(l, days, ttl = 0) {
         evs = hit.events;
       } else {
         try {
-          const res = await fetch(scoreboardUrl(l, d, 300));
+          const res = await fetch(scoreboardUrl(l, d, 300), { signal: AbortSignal.timeout(20000) });
           if (!res.ok) throw new Error(`${l.name}: HTTP ${res.status}`);
           evs = (await res.json()).events || [];
           dayCache.set(ck, { at: Date.now(), events: evs });
+          if (dayCache.size > 400) { // a tray app runs for weeks: drop the oldest days
+            const old = [...dayCache.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 100);
+            for (const [k] of old) dayCache.delete(k);
+          }
         } catch (err) {
           errors.push(err.message);
           continue;
@@ -56,6 +60,8 @@ function periodInfo(kind, st) {
     case 'hockey':
       if (p <= 3) return { label: `${ord(p)} Period`, key: `p${p}` };
       if (p === 4) return { label: 'Overtime', key: 'ot' };
+      // playoffs have no shootout: ESPN's own text ("2OT", "3OT") says which overtime this is
+      if (/\bOT\b|\dOT/i.test(`${st.type.shortDetail || ''} ${st.type.detail || ''}`) && !/\bSO\b|shootout/i.test(`${st.type.shortDetail || ''} ${st.type.detail || ''}`)) return { label: `${p - 3}OT`, key: `ot${p}` };
       return { label: 'Shootout', key: 'so' };
     case 'baseball': {
       const d = st.type.shortDetail || `Inning ${p}`;
@@ -287,6 +293,7 @@ function standingsChanges(before, after) {
 
 /* ---------- Playoffs ---------- */
 const postCache = new Map(); // league key -> { at, on }
+const POST_TTL_FALLBACK = 540000; // a failed lookup is retried after ~1 minute instead of 10
 const seasonType = (v) => (v && typeof v === 'object' ? Number(v.type) : Number(v));
 
 // Cheap check: is this league in its postseason today? One request, cached for 10 minutes.
@@ -295,14 +302,19 @@ async function isPostseason(l, ttl = 600000) {
   if (hit && Date.now() - hit.at < ttl) return hit.on;
   let on = hit ? hit.on : false; // keep the last answer if the network hiccups
   try {
-    const res = await fetch(scoreboardUrl(l, dayStr(new Date()), 50));
-    if (res.ok) {
+    const res = await fetch(scoreboardUrl(l, dayStr(new Date()), 50), { signal: AbortSignal.timeout(20000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    {
       const j = await res.json();
       const top = seasonType(j.season && j.season.type);
       const lg = seasonType(j.leagues && j.leagues[0] && j.leagues[0].season && j.leagues[0].season.type);
       on = top === 3 || lg === 3 || (j.events || []).some((ev) => ev.season && ev.season.type === 3);
     }
-  } catch (_) {}
+  } catch (_) {
+    // offline moment: keep the last answer but ask again soon instead of trusting it for the whole TTL
+    postCache.set(l.key, { at: Date.now() - POST_TTL_FALLBACK, on });
+    return on;
+  }
   postCache.set(l.key, { at: Date.now(), on });
   return on;
 }
@@ -477,7 +489,8 @@ async function isInSeason(l, ttl = 3 * 3600000) {
   if (events.length) on = true;
   else if (errors.length) on = hit ? hit.on : true; // unknown: don't hide
   else on = false;
-  seasonCache.set(l.key, { at: Date.now(), on });
+  // an unknown answer is only remembered for a few minutes
+  seasonCache.set(l.key, { at: errors.length && !events.length ? Date.now() - ttl + 5 * 60000 : Date.now(), on });
   return on;
 }
 
@@ -492,7 +505,7 @@ const prettyGroup = (s) =>
   String(s || 'Roster').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase());
 
 function parseRoster(data) {
-  const raw = Array.isArray(data.athletes) ? data.athletes : [];
+  const raw = Array.isArray(data.athletes) ? data.athletes.filter(Boolean) : [];
   const mapAthlete = (a) => ({
     id: String(a.id),
     name: a.displayName || a.fullName || '',
@@ -506,7 +519,7 @@ function parseRoster(data) {
     injury: (a.injuries && a.injuries[0] && (a.injuries[0].status || 'Injured')) || '',
     link: playerCard(a)
   });
-  const byJersey = (x, y) => (parseInt(x.jersey, 10) || 999) - (parseInt(y.jersey, 10) || 999) || x.name.localeCompare(y.name);
+  const byJersey = (x, y) => (Number.isNaN(parseInt(x.jersey, 10)) ? 999 : parseInt(x.jersey, 10)) - (Number.isNaN(parseInt(y.jersey, 10)) ? 999 : parseInt(y.jersey, 10)) || x.name.localeCompare(y.name);
 
   const groups = [];
   if (raw.length && raw.every((g) => g && Array.isArray(g.items))) {
@@ -545,8 +558,8 @@ const injCache = new Map(); // league key -> { at, data }
 
 function parseInjuries(l, data) {
   const teams = [];
-  for (const t of data.injuries || []) {
-    const items = (t.injuries || []).map((i) => {
+  for (const t of (data.injuries || []).filter(Boolean)) {
+    const items = (t.injuries || []).filter(Boolean).map((i) => {
       const a = i.athlete || {};
       const d = i.details || {};
       return {
@@ -561,7 +574,7 @@ function parseInjuries(l, data) {
         comment: i.shortComment || '',
         link: playerCard(a)
       };
-    }).sort((x, y) => new Date(y.date) - new Date(x.date));
+    }).sort((x, y) => (Date.parse(y.date) || 0) - (Date.parse(x.date) || 0));
     if (!items.length) continue;
     const at = (t.injuries.find((i) => i.athlete && i.athlete.team) || {}).athlete;
     const team = (at && at.team) || {};
@@ -743,11 +756,12 @@ class Engine {
 
   start() {
     this.stopped = false;
-    this.tick();
+    this.tick().catch(() => {});
   }
 
   stop() {
     this.stopped = true;
+    this.again = false;
     clearTimeout(this.timer);
     for (const job of this.standJobs) clearTimeout(job.timer);
     this.standJobs.clear();
@@ -835,41 +849,69 @@ class Engine {
     job.timer = setTimeout(step, 90000);
   }
 
+  // One poll at a time: a settings change during a poll asks for another poll right after it, instead of
+  // running two at once (they would write the game state out of order and could repeat a Final)
   async tick() {
+    if (this.stopped) return;
+    if (this.busy) { this.again = true; return; }
+    this.busy = true;
     clearTimeout(this.timer);
-    const settings = this.getSettings();
-    const leagueKeys = [...new Set(settings.follows.map((f) => f.league))];
-    const now = new Date();
-    // While a game is live only yesterday-to-tomorrow needs the fast poll; otherwise look a week ahead
-    const span = this.anyLive ? 1 : 7;
-    const days = [];
-    for (let i = -1; i <= span; i++) days.push(dayStr(new Date(now.getFullYear(), now.getMonth(), now.getDate() + i)));
-    const games = [];
-    const seen = new Set();
+    let anyLive = this.anyLive;
+    try {
+      const settings = this.getSettings();
+      const leagueKeys = [...new Set(settings.follows.map((f) => f.league))];
+      const now = new Date();
+      // While a game is live only yesterday-to-tomorrow needs the fast poll; otherwise look a week ahead
+      const span = this.anyLive ? 1 : 7;
+      const days = [];
+      for (let i = -1; i <= span; i++) days.push(dayStr(new Date(now.getFullYear(), now.getMonth(), now.getDate() + i)));
+      const games = [];
+      const seen = new Set();
 
-    await Promise.all(
-      leagueKeys.map(async (key) => {
-        const l = LEAGUES.find((x) => x.key === key);
-        if (!l) return;
-        const { events, errors } = await fetchDays(l, days);
-        if (errors.length) console.error(`[engine] ${key}:`, errors.join('; '));
-        for (const ev of events) {
-          const g = parseEvent(l, ev);
-          if (!g || seen.has(g.id)) continue;
-          const followed = this.followedIn(settings, g);
-          if (!followed.length) continue;
-          seen.add(g.id);
-          this.process(g, followed, settings);
-          games.push(g);
+      const results = await Promise.all(
+        leagueKeys.map(async (key) => {
+          const l = LEAGUES.find((x) => x.key === key);
+          if (!l) return null;
+          const { events, errors } = await fetchDays(l, days);
+          if (errors.length) console.error(`[engine] ${key}:`, errors.join('; '));
+          return { l, events };
+        })
+      );
+      if (this.stopped) return; // shut down while we were waiting: send nothing, schedule nothing
+
+      for (const r of results) {
+        if (!r) continue;
+        for (const ev of r.events) {
+          try {
+            const g = parseEvent(r.l, ev);
+            if (!g || seen.has(g.id)) continue;
+            const followed = this.followedIn(settings, g);
+            if (!followed.length) continue;
+            seen.add(g.id);
+            this.process(g, followed, settings);
+            games.push(g);
+          } catch (err) {
+            // one odd event from ESPN must never stop the poll for everything else
+            console.error(`[engine] skipped an event in ${r.l.key}:`, err && err.message);
+          }
         }
-      })
-    );
+      }
 
-    this.games = games;
-    this.onUpdate(games);
-    const anyLive = games.some((g) => g.state === 'in');
-    this.anyLive = anyLive;
-    this.timer = setTimeout(() => this.tick(), anyLive ? 15000 : 60000);
+      this.games = games;
+      this.onUpdate(games);
+      anyLive = games.some((g) => g.state === 'in');
+      this.anyLive = anyLive;
+    } catch (err) {
+      console.error('[engine] poll failed:', err && err.message);
+    } finally {
+      this.busy = false;
+      if (!this.stopped) {
+        const again = this.again;
+        this.again = false;
+        clearTimeout(this.timer);
+        this.timer = setTimeout(() => this.tick(), again ? 250 : anyLive ? 15000 : 60000);
+      }
+    }
   }
 
   followedIn(settings, g) {
@@ -926,12 +968,14 @@ class Engine {
       const dAway = g.away.score - prev.away;
       // Basketball scores every few seconds, so it gets period-by-period updates instead
       if ((dHome > 0 || dAway > 0) && g.kind !== 'basketball' && this.wants(followed, 'score')) {
+        const both = dHome > 0 && dAway > 0; // both sides scored between two polls
         const scorer = dHome > 0 ? g.home : g.away;
         const diff = dHome > 0 ? dHome : dAway;
         const word =
-          g.kind === 'baseball' ? (diff > 1 ? `${diff} runs score` : 'Run scores')
-          : g.kind === 'football' ? `+${diff} points`
-          : 'GOAL!'; // hockey
+          g.kind === 'baseball' ? (both ? 'Runs score' : diff > 1 ? `${diff} runs score` : 'Run scores')
+          : g.kind === 'football' ? (both ? 'Both teams score' : `+${diff} points`)
+          : both ? 'Goals' : 'GOAL!'; // hockey
+        const who = both ? `${g.away.name} and ${g.home.name}` : scorer.name;
         // The line under the title is fixed now (the clock moves on while we wait for ESPN's detail)
         const head = `${scoreLine} · ${g.label}${g.state === 'in' && g.kind === 'hockey' ? ' ' + g.clock : ''}`.trim();
         const from = { away: prev.away, home: prev.home };
@@ -939,7 +983,7 @@ class Engine {
         this.queue(g.id, async () => {
           const detail = await this.scoringDetail(g, from, to); // null: send the plain alert as before
           if (this.stopped) return;
-          this.notify({ title: `${word} ${scorer.name}`, body: detail ? `${detail}\n${head}` : head, gameId: g.id });
+          this.notify({ title: `${word} ${who}`, body: detail ? `${detail}\n${head}` : head, gameId: g.id });
         });
       }
 

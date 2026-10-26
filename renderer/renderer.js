@@ -98,7 +98,7 @@ function pickGroup(rerender) {
 const gamesOfTeam = (f, list) => list.filter((g) => g.league === f.league && (g.home.id === f.teamId || g.away.id === f.teamId));
 const teamHead = (f) => {
   const lg = leagueOf(f.league);
-  return `<div class="teamhd"><img src="${esc(f.logo)}" alt="" onerror="this.style.visibility='hidden'" /><div><b>${esc(f.name)}</b><span>${lg ? lg.icon + ' ' + esc(lg.name) : ''}</span></div></div>`;
+  return `<div class="teamhd"><img src="${esc(f.logo)}" alt="" /><div><b>${esc(f.name)}</b><span>${lg ? lg.icon + ' ' + esc(lg.name) : ''}</span></div></div>`;
 };
 
 const noFollowedHtml = (what) => `<div class="empty"><h3>Pick your teams</h3><p>Follow a team and its league shows up here with ${what}.</p>
@@ -110,8 +110,11 @@ const validLeague = (cur, list) => (list.some((l) => l.key === cur) ? cur : list
 const HIDING_TABS = ['teams', 'scores', 'schedule', 'recaps', 'standings', 'injuries'];
 
 async function refreshSeasonStatus() {
-  try { state.activeLeagues = await api.seasonStatus(); } catch (_) { return; }
-  if (HIDING_TABS.includes(state.tab)) render();
+  let list;
+  try { list = await api.seasonStatus(); } catch (_) { return; }
+  const same = Array.isArray(list) && Array.isArray(state.activeLeagues) && list.length === state.activeLeagues.length && list.every((k) => state.activeLeagues.includes(k));
+  state.activeLeagues = list;
+  if (!same && HIDING_TABS.includes(state.tab)) render(); // unchanged answer: leave the view (and anything typed in it) alone
 }
 
 // Which followed teams are out of the season or the playoffs. Only asked while "Autohide teams that are out" is on.
@@ -160,7 +163,7 @@ function gameCard(g, i) {
   const showScore = live || post;
   const row = (team, dim) => `
     <div class="row">
-      <img src="${esc(team.logo)}" alt="" onerror="this.style.visibility='hidden'" />
+      <img src="${esc(team.logo)}" alt="" />
       <div class="name ${dim ? 'dim' : ''}">${esc(team.name)}</div>
       ${showScore ? `<div class="score ${dim ? 'dim' : ''}">${team.score}</div>` : ''}
     </div>`;
@@ -265,9 +268,10 @@ async function loadDetail() {
   const d = state.detail;
   const g = detailGame();
   if (!d || !g) return;
+  const seq = (d.seq = (d.seq || 0) + 1);
   let r;
   try { r = await api.gameDetail(g.league, g.eventId); } catch (e) { r = { ok: false, error: e.message }; }
-  if (state.detail !== d) return; // closed or switched while we waited
+  if (state.detail !== d || d.seq !== seq) return; // closed or switched while we waited, or a newer answer already arrived
   d.loading = false;
   if (r && r.ok) { d.data = r; d.error = null; if (g.state === 'post') d.settled = true; }
   else d.error = (r && r.error) || 'ESPN did not answer';
@@ -284,7 +288,7 @@ function detailHero(g, d) {
     : `<span class="pill">${esc(t.day)} · ${esc(t.time)}</span>`;
   const side = (team, win) => `
     <div class="dteam ${win ? 'win' : ''}">
-      <img src="${esc(team.logo)}" alt="" onerror="this.style.visibility='hidden'" />
+      <img src="${esc(team.logo)}" alt="" />
       <b>${esc(team.name)}</b>
       <em class="dscore">${live || post ? esc(team.score) : ''}</em>
     </div>`;
@@ -294,7 +298,7 @@ function detailHero(g, d) {
     const row = (team) => {
       const info = data.teams.find((x) => x.id === team.id);
       const cells = data.heads.map((_, i) => `<td>${esc(info && info.lines[i] != null ? info.lines[i] : '')}</td>`).join('');
-      return `<tr><td class="lt"><div class="tm"><img src="${esc(team.logo)}" alt="" onerror="this.style.visibility='hidden'" /><span>${esc(team.abbr)}</span></div></td>${cells}<td class="tot">${esc(team.score)}</td></tr>`;
+      return `<tr><td class="lt"><div class="tm"><img src="${esc(team.logo)}" alt="" /><span>${esc(team.abbr)}</span></div></td>${cells}<td class="tot">${esc(team.score)}</td></tr>`;
     };
     lines = `<table class="stbl dlines"><thead><tr><th class="tmh"></th>${data.heads.map((h) => `<th>${esc(h)}</th>`).join('')}<th>T</th></tr></thead><tbody>${row(g.away)}${row(g.home)}</tbody></table>`;
   }
@@ -381,6 +385,12 @@ function paintDetail() {
   view.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => api.openLink(b.dataset.open)));
 }
 
+// Broken logos and headshots are hidden. (An inline onerror="" attribute would be blocked by the page's CSP.)
+// "error" doesn't bubble, so listen in the capture phase.
+document.addEventListener('error', (e) => {
+  const el = e.target;
+  if (el && el.tagName === 'IMG') el.style[el.classList.contains('cimg') ? 'display' : 'visibility'] = el.classList.contains('cimg') ? 'none' : 'hidden';
+}, true);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.detail && state.tab === 'scores') closeDetail(); });
 
 /* ---------- Schedules view (day agenda / week / month) ---------- */
@@ -415,7 +425,7 @@ function gameEntry(g, compact) {
   const p = perspective(g);
   const tip = `${g.away.name} at ${g.home.name} · ${new Date(g.date).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })} ${p.time}`;
   return `<div class="ev ${g.state} ${compact ? 'compact' : ''}" style="--c:${p.mine.color || '#7c8cff'}" title="${esc(tip)}">
-    <img src="${esc(p.mine.logo)}" alt="" onerror="this.style.visibility='hidden'" />
+    <img src="${esc(p.mine.logo)}" alt="" />
     <div>
       <b>${esc(p.mine.abbr)} ${p.home ? 'vs' : '@'} ${esc(p.opp.abbr)}</b>
       <em>${esc(p.time)} · <span class="ha ${p.home ? 'home' : 'away'}">${p.home ? 'HOME' : 'AWAY'}</span></em>
@@ -428,7 +438,7 @@ function agendaRow(g) {
   const p = perspective(g);
   return `<div class="arow ${g.state}" style="--c:${p.mine.color || '#7c8cff'}">
     <time>${esc(p.time)}</time>
-    <img src="${esc(p.mine.logo)}" alt="" onerror="this.style.visibility='hidden'" />
+    <img src="${esc(p.mine.logo)}" alt="" />
     <div class="amain">
       <b>${esc(p.mine.name)} ${p.home ? 'vs' : '@'} ${esc(p.opp.name)}</b>
       <span>${g.icon} ${esc(g.leagueName)} · <span class="ha ${p.home ? 'home' : 'away'}">${p.home ? 'HOME' : 'AWAY'}</span></span>
@@ -574,13 +584,16 @@ async function renderTeams() {
   const key = state.pickLeague;
   if (!state.teamCache[key]) {
     view.innerHTML = `<div class="empty"><p>Loading teams…</p></div>`;
+    const stale = () => state.tab !== 'teams' || state.pickLeague !== key; // user moved on while we waited
     try {
       state.teamCache[key] = await api.teams(key);
     } catch (e) {
+      if (stale()) return;
+      setActions(null, null, null, { items: visibleLeagues().map((l) => [l.key, `${l.icon} ${esc(l.name)}`]), current: key, onPick: (k) => { state.pickLeague = k; state.teamQuery = ''; renderTeams(); } });
       view.innerHTML = `<div class="empty"><h3>Couldn't load teams</h3><p>Check your connection and try again.</p></div>`;
       return;
     }
-    if (state.tab !== 'teams') return;
+    if (stale()) return;
   }
 
   const following = state.settings.follows
@@ -591,7 +604,7 @@ async function renderTeams() {
         ([k, label]) => `<button class="tg ${f.alerts[k] ? 'on' : ''}" data-i="${idx}" data-k="${k}">${label}</button>`
       ).join('');
       return `<div class="follow">
-        <img src="${esc(f.logo)}" alt="" onerror="this.style.visibility='hidden'" />
+        <img src="${esc(f.logo)}" alt="" />
         <div class="who"><b>${esc(f.name)}</b><span>${lg ? lg.icon + ' ' + esc(lg.name) : ''}</span></div>
         <div class="toggles">${toggles}</div>
         <button class="x" data-rm="${idx}" title="Unfollow">✕</button>
@@ -608,7 +621,7 @@ async function renderTeams() {
   const tiles = state.teamCache[key]
     .map(
       (t) => `<div class="team ${isFollowed(key, t.teamId) ? 'on' : ''}" data-id="${t.teamId}">
-        <img src="${esc(t.logo)}" alt="" onerror="this.style.visibility='hidden'" />${esc(t.name)}</div>`
+        <img src="${esc(t.logo)}" alt="" />${esc(t.name)}</div>`
     )
     .join('');
 
@@ -731,7 +744,7 @@ async function renderStandings() {
         <tbody>${g.rows.map((r, i) => `
           <tr class="${isShownFollowed(key, r.teamId) ? 'mine' : ''}">
             <td class="rk">${i + 1}</td>
-            <td class="tmc"><div class="tm"><img src="${esc(r.logo)}" alt="" onerror="this.style.visibility='hidden'" /><span>${esc(r.name)}</span>${r.clincher ? `<span class="cl" title="${esc(CLINCH[r.clincher] || 'Clinch status')}">${esc(r.clincher)}</span>` : ''}</div></td>
+            <td class="tmc"><div class="tm"><img src="${esc(r.logo)}" alt="" /><span>${esc(r.name)}</span>${r.clincher ? `<span class="cl" title="${esc(CLINCH[r.clincher] || 'Clinch status')}">${esc(r.clincher)}</span>` : ''}</div></td>
             ${l.cols.map(([, k]) => `<td>${esc(r.stats[k] != null ? r.stats[k] : '–')}</td>`).join('')}
           </tr>`).join('')}
         </tbody>
@@ -751,7 +764,7 @@ function seriesCard(s, i) {
   const dim = (t) => s.completed && leader && leader.id !== t.id;
   const row = (t) => `
     <div class="row">
-      <img src="${esc(t.logo)}" alt="" onerror="this.style.visibility='hidden'" />
+      <img src="${esc(t.logo)}" alt="" />
       <div class="name ${dim(t) ? 'dim' : ''}">${esc(t.name)}</div>
       <div class="score ${dim(t) ? 'dim' : ''}">${esc(val(t))}</div>
     </div>`;
@@ -835,7 +848,7 @@ async function renderRoster() {
   const lg = leagueOf(f.league);
 
   setActions(null, null, null, {
-    items: follows.map((x) => [followKey(x), `<img class="cimg" src="${esc(x.logo)}" alt="" onerror="this.style.display='none'" />${esc(x.name)}`]),
+    items: follows.map((x) => [followKey(x), `<img class="cimg" src="${esc(x.logo)}" alt="" />${esc(x.name)}`]),
     current: state.rosterKey,
     onPick: (k) => { state.rosterKey = k; renderRoster(); }
   });
@@ -867,7 +880,7 @@ async function renderRoster() {
         <tbody>${g.players.map((p) => `
           <tr data-n="${esc(p.name.toLowerCase())}">
             <td class="rk">${cell(p.jersey)}</td>
-            <td class="tmc"><div class="tm"><img class="hs" src="${esc(p.headshot)}" alt="" onerror="this.style.visibility='hidden'" />${p.link ? `<a href="#" data-open="${esc(p.link)}">${esc(p.name)}</a>` : `<span>${esc(p.name)}</span>`}</div></td>
+            <td class="tmc"><div class="tm"><img class="hs" src="${esc(p.headshot)}" alt="" />${p.link ? `<a href="#" data-open="${esc(p.link)}">${esc(p.name)}</a>` : `<span>${esc(p.name)}</span>`}</div></td>
             <td>${cell(p.pos)}</td><td>${cell(p.age)}</td><td>${cell(p.height)}</td><td>${cell(p.weight)}</td><td>${cell(p.exp)}</td>
             <td>${p.injury ? `<span class="st ${statusClass(p.injury)}">${esc(p.injury)}</span>` : ''}</td>
           </tr>`).join('')}
@@ -877,7 +890,7 @@ async function renderRoster() {
 
   view.innerHTML = `
     <div class="rhead">
-      <img src="${esc(f.logo)}" alt="" onerror="this.style.visibility='hidden'" />
+      <img src="${esc(f.logo)}" alt="" />
       <div class="who"><b>${esc(f.name)}</b><span>${lg ? lg.icon + ' ' + esc(lg.name) : ''}${data.coach ? ' · Coach ' + esc(data.coach) : ''}</span></div>
       <input id="rq" class="search" type="search" placeholder="Search players" value="${esc(state.rosterQuery)}" />
     </div>
@@ -975,7 +988,7 @@ async function renderInjuries() {
     const upd = shortDate(p.date);
     const detail = [p.kind, p.comment].filter(Boolean).join(' · ');
     return `<div class="injrow">
-      <img class="hs" src="${esc(p.headshot)}" alt="" onerror="this.style.visibility='hidden'" />
+      <img class="hs" src="${esc(p.headshot)}" alt="" />
       <div class="ib">
         <b>${p.link ? `<a href="#" data-open="${esc(p.link)}">${esc(p.name)}</a>` : esc(p.name)} ${p.pos ? `<em>${esc(p.pos)}</em>` : ''}</b>
         <span>${esc(detail)}</span>
@@ -986,7 +999,7 @@ async function renderInjuries() {
   };
   view.innerHTML = `<div class="injgrid">${teams.map((t) => `
     <article class="injteam ${followed(t) ? 'mine' : ''}">
-      <header><img src="${esc(t.logo)}" alt="" onerror="this.style.visibility='hidden'" /><b>${esc(t.name)}</b>${followed(t) ? '<span class="tag">Following</span>' : ''}<span class="cnt">${t.items.length}</span></header>
+      <header><img src="${esc(t.logo)}" alt="" /><b>${esc(t.name)}</b>${followed(t) ? '<span class="tag">Following</span>' : ''}<span class="cnt">${t.items.length}</span></header>
       ${t.items.map(row).join('')}
     </article>`).join('')}</div>`;
   bind();
@@ -1035,7 +1048,6 @@ function updateRow() {
 function renderSettings() {
   titleEl.textContent = 'Settings';
   subEl.textContent = `How SportsChud starts and runs${state.version ? ' · v' + state.version : ''}`;
-  const st = state.settings;
   const general = [
     ['launchAtStartup', 'Launch at startup', 'Open SportsChud automatically when you sign in to Windows.'],
     ['startSilently', 'Start silently', 'On startup, run in the background with no window. Open it from the tray icon. Needs "Keep running in tray".'],
@@ -1051,7 +1063,7 @@ function renderSettings() {
     ['hideEliminated', 'Autohide teams that are out', 'When one of your teams is out of the season or the playoffs (it lost its last playoff series, missed the playoffs, or ESPN marks it eliminated), take that team out of Scores, Recaps, Standings, Schedules and Injuries. If that was your only team in a sport, the sport goes too. Roster and Teams still list it, and alerts keep working.'],
     ['overlayAutoHide', 'Autohide Mini scoreboard', 'Only show the mini scoreboard while one of your teams is playing a live game. Turn off to keep it on screen with a "No live games" message. Needs "Mini scoreboard" turned on.']
   ];
-  const isOn = (k) => (DEFAULT_ON.includes(k) ? st[k] !== false : !!st[k]);
+  const isOn = (k) => (DEFAULT_ON.includes(k) ? state.settings[k] !== false : !!state.settings[k]); // always the current settings: persist() replaces the object
   const row = ([k, title, desc]) => `
     <div class="setrow">
       <div><b>${title}</b><span>${desc}</span></div>
@@ -1079,6 +1091,7 @@ function renderSettings() {
   view.querySelectorAll('[data-set]').forEach((b) => {
     b.onclick = async () => {
       const k = b.dataset.set;
+      const st = state.settings;
       if (k === 'overlayEnabled') {
         // The main process owns this one (the tray menu changes it too), so ask it rather than saving it here
         st[k] = await api.setOverlay(!isOn(k));
@@ -1228,8 +1241,8 @@ async function renderRecaps() {
     return `<article class="rcard" style="--c:${p.mine.color || '#7c8cff'}">
       <div class="rhead"><span>${g.icon} ${esc(g.leagueName)} · ${esc(d)}</span><span class="rbadge ${p.cls}">${p.cls === 'W' ? 'WIN' : p.cls === 'L' ? 'LOSS' : 'FINAL'}</span></div>
       <div class="rscore">
-        <div class="rt"><img src="${esc(g.away.logo)}" alt="" onerror="this.style.visibility='hidden'" /><b>${esc(g.away.name)}</b><em>${g.away.score}</em></div>
-        <div class="rt"><img src="${esc(g.home.logo)}" alt="" onerror="this.style.visibility='hidden'" /><b>${esc(g.home.name)}</b><em>${g.home.score}</em></div>
+        <div class="rt"><img src="${esc(g.away.logo)}" alt="" /><b>${esc(g.away.name)}</b><em>${g.away.score}</em></div>
+        <div class="rt"><img src="${esc(g.home.logo)}" alt="" /><b>${esc(g.home.name)}</b><em>${g.home.score}</em></div>
       </div>
       <div class="rfoot">
         <span>${esc(g.detail || 'Final')}${g.broadcast ? ' · ' + esc(g.broadcast) : ''}</span>

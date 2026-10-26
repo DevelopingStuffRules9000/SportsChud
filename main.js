@@ -415,6 +415,7 @@ if (!gotLock) {
 } else {
   // Launching again (pinned taskbar icon, desktop shortcut) reveals the hidden window
   app.on('second-instance', (_e, argv) => {
+    if (quitting) return; // closing for an update or a quit: don't pop a window back up
     logLine(`second-instance received (argv: ${JSON.stringify(argv.slice(1))}); window ${win && !win.isDestroyed() ? (win.isVisible() ? 'visible' : 'hidden') : 'missing'}`);
     showWindow();
   });
@@ -439,6 +440,7 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:get', () => settings);
   ipcMain.handle('settings:save', (_, next) => {
     if (resetting) return settings;
+    if (!next || typeof next !== 'object' || !Array.isArray(next.follows)) return settings; // ignore garbage
     // On/off and position belong to the main process (tray menu, dragging): keep them even if the
     // renderer's copy of the settings is out of date
     next.overlayEnabled = settings.overlayEnabled;
@@ -489,7 +491,9 @@ app.whenReady().then(() => {
     return true;
   });
   ipcMain.handle('games:get', () => engine.games);
-  ipcMain.handle('schedule', async (_, { start, end }) => {
+  ipcMain.handle('schedule', async (_, range) => {
+    const { start, end } = range || {};
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start || end - start > 100 * 86400000) return { games: [], errors: ['Invalid date range'], failed: true };
     try { return await getSchedule(start, end); }
     catch (err) { return { games: [], errors: [err.message], failed: true }; }
   });
@@ -564,7 +568,9 @@ app.whenReady().then(() => {
   );
   ipcMain.handle('teams', async (_, key) => {
     const l = LEAGUES.find((x) => x.key === key);
+    if (!l) throw new Error('Unknown league');
     const res = await fetch(teamsUrl(l));
+    if (!res.ok) throw new Error(`ESPN answered ${res.status}`);
     const data = await res.json();
     const teams = data.sports[0].leagues[0].teams.map(({ team: t }) => ({
       teamId: String(t.id),
