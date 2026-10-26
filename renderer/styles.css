@@ -372,6 +372,14 @@ a[data-open]:hover { text-decoration: underline; }
 .stbl .lt .tm { display: flex; align-items: center; gap: 8px; }
 .stbl .lt .tm img { width: 20px; height: 20px; object-fit: contain; }
 .dstats { max-width: 520px; }
+/* Summary tab: team stats 30% | scoring summary 70% (stacked in a narrow window) */
+.dsum { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 7fr); gap: 28px; align-items: start; }
+.dsum.solo { grid-template-columns: minmax(0, 1fr); }
+.dsum .dstats { max-width: none; width: 100%; table-layout: fixed; }
+.dsum .dstats th:not(:first-child), .dsum .dstats td:not(:first-child) { width: 52px; padding-left: 4px; padding-right: 8px; }
+.dsum .dstats td.lt { white-space: normal; overflow-wrap: anywhere; line-height: 1.25; }
+.dsum-stats h2:first-child, .dsum-score h2:first-child { margin-top: 6px; }
+@media (max-width: 1000px) { .dsum { grid-template-columns: minmax(0, 1fr); gap: 0; } .dsum .dstats { max-width: 520px; } }
 .dstats td, .dstats th { text-align: center; }
 .dstats .lt, .dstats .tmh { text-align: left; }
 .dbox { margin-bottom: 14px; }

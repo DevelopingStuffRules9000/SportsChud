@@ -314,7 +314,7 @@ function detailHero(g, d) {
 
 function detailSummary(g, d) {
   const data = d.data;
-  let html = '';
+  let stats = '';
   // Team stats side by side (shots, hits, rebounds ...)
   const sa = data.teamStats.find((t) => t.id === g.away.id), sh = data.teamStats.find((t) => t.id === g.home.id);
   if (sa && sh && sa.stats.length) {
@@ -322,9 +322,9 @@ function detailSummary(g, d) {
       const o = sh.stats.find((x) => x.label === s.label);
       return o ? `<tr><td class="lt">${esc(s.label)}</td><td>${esc(s.value)}</td><td>${esc(o.value)}</td></tr>` : '';
     }).join('');
-    if (rows) html += `<h2>Team stats</h2><table class="stbl dstats"><thead><tr><th class="tmh"></th><th>${esc(g.away.abbr)}</th><th>${esc(g.home.abbr)}</th></tr></thead><tbody>${rows}</tbody></table>`;
+    if (rows) stats = `<h2>Team stats</h2><table class="stbl dstats"><thead><tr><th class="tmh"></th><th>${esc(g.away.abbr)}</th><th>${esc(g.home.abbr)}</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
-  html += '<h2>Scoring summary</h2>';
+  let html = '<h2>Scoring summary</h2>';
   html += data.scoring.length
     ? `<div class="dlist">${data.scoring.map((p) => `
         <div class="dplay scoring">
@@ -333,7 +333,8 @@ function detailSummary(g, d) {
           ${p.away !== '' && p.home !== '' ? `<span class="dnow">${esc(g.away.abbr)} ${esc(p.away)} – ${esc(p.home)} ${esc(g.home.abbr)}</span>` : ''}
         </div>`).join('')}</div>`
     : `<p class="dnone">${g.state === 'pre' ? "The game hasn't started yet." : 'No scoring yet.'}</p>`;
-  return html;
+  // Team stats on the left (30%), scoring summary on the right (70%); without team stats the summary takes the full width
+  return `<div class="dsum${stats ? '' : ' solo'}">${stats ? `<section class="dsum-stats">${stats}</section>` : ''}<section class="dsum-score">${html}</section></div>`;
 }
 
 function detailBox(g, d) {
