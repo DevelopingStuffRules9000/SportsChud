@@ -52,7 +52,7 @@ The installed app checks GitHub for a newer release 20 seconds after it starts a
 - **Scoring** alerts say who scored, not just that the score changed: the first line is ESPN's description of the play (for example the goal scorer and assists in hockey, or the passer and receiver on a touchdown), and the score and period are on the line below. SportsChud asks ESPN for the play details when the score changes and tries up to three times over about 10 seconds if ESPN's play list is slow to update; if it still has nothing, you get the same plain alert as before, so an alert is never lost. If two scores land between checks, the last few plays are listed. An alert for the period ending or the game finishing waits behind a scoring alert for the same game, so "Final" never arrives before the last goal.
 - NBA games report at each quarter break and at the final instead of every basket.
 - The app polls ESPN's public scoreboard feed (every 15s when a game is live, 60s otherwise) and sends Windows toast notifications when something changes.
-- SportsChud must be running to send alerts. Closing the window quits the app.
+- SportsChud must be running to send alerts. By default closing the window hides it to the tray and it keeps running; quit from the tray icon. Turn off **Keep running in tray** in Settings if you want closing the window to quit.
 
 ## Recaps
 Recaps shows the last 3 finished games for each team you follow (looking back up to 35 days, so weekly sports with a bye still fill up). **By status** shows those same games in one list.
