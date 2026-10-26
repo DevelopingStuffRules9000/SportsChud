@@ -177,7 +177,7 @@ function buildTrayMenu() {
     { label: 'Open SportsChud', click: () => showWindow() },
     { label: 'Mini scoreboard', type: 'checkbox', checked: !!settings.overlayEnabled, click: (item) => setOverlayEnabled(item.checked) },
     { type: 'separator' },
-    { label: 'Quit', click: () => { quitting = true; app.quit(); } }
+    { label: 'Quit', click: () => { if (updateReady) shutdownAll(); else { quitting = true; app.quit(); } } }
   ]));
 }
 
@@ -339,6 +339,19 @@ function notify({ title, body, gameId }) {
   if (win && !win.isDestroyed()) win.webContents.send('activity', entry);
 }
 
+let updateReady = false;
+// Stops everything (engine, timers, mini scoreboard, tray, window) so the process really ends
+function shutdownAll() {
+  quitting = true;
+  engine.stop();
+  updater.stop();
+  closeOverlay();
+  try { if (tray) { tray.destroy(); tray = null; } } catch (_) {}
+  if (win && !win.isDestroyed()) win.destroy();
+  app.quit();
+  setTimeout(() => app.exit(0), 4000); // backstop: never leave a stray process behind
+}
+
 const engine = new Engine({
   getSettings: () => settings,
   notify,
@@ -360,19 +373,9 @@ const updater = new Updater({
     n.on('click', () => showWindow());
     n.show();
   },
-  beforeQuit: () => {
-    // The installer has been downloaded and a helper is waiting for SportsChud to exit before it starts it.
-    // Shut everything down now (not just the window: the tray icon, mini scoreboard and timers too).
-    quitting = true;
-    engine.stop();
-    updater.stop();
-    closeOverlay();
-    try { if (tray) { tray.destroy(); tray = null; } } catch (_) {}
-    if (win && !win.isDestroyed()) win.destroy();
-    app.quit();
-    // Backstop: if anything is still holding the process open, force it, so the installer is never blocked
-    setTimeout(() => app.exit(0), 4000);
-  }
+  // The installer has been opened and SportsChud is still running. From now on closing SportsChud quits it for
+  // real (no tray), so nothing is left running when the installer needs to replace the files.
+  onInstallerOpened: () => { updateReady = true; }
 });
 
 function createWindow(forceShow = false) {
@@ -394,6 +397,7 @@ function createWindow(forceShow = false) {
   });
   win.removeMenu();
   win.on('close', (e) => {
+    if (!quitting && updateReady) { e.preventDefault(); shutdownAll(); return; } // update opened: closing means quitting
     if (!quitting && settings.keepInTray) {
       e.preventDefault();
       win.hide();
@@ -587,7 +591,7 @@ app.whenReady().then(() => {
   app.on('activate', () => (!win || win.isDestroyed()) && createWindow());
 });
 
-app.on('before-quit', () => { quitting = true; });
+app.on('before-quit', () => { if (updateReady && !quitting) { quitting = true; shutdownAll(); return; } quitting = true; });
 app.on('window-all-closed', () => {
   if (settings.keepInTray && !quitting) return; // stay alive in the tray
   engine.stop();

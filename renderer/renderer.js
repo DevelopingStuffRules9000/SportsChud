@@ -1016,7 +1016,7 @@ function renderUpdBar() {
   const u = state.update;
   const show = !!(u && u.supported && u.available);
   bar.hidden = !show;
-  if (show) bar.textContent = u.installing ? 'Download finished. Closing SportsChud to run the installer…' : u.downloading ? `Downloading SportsChud v${u.version}… ${u.progress}%` : `SportsChud v${u.version} is available. Click to open Settings and install it.`;
+  if (show) bar.textContent = u.installing ? 'The installer is open. Finish it there; SportsChud closes completely when you quit.' : u.downloading ? `Downloading SportsChud v${u.version}… ${u.progress}%` : `SportsChud v${u.version} is available. Click to open Settings and install it.`;
 }
 function updateRow() {
   const u = state.update;
@@ -1026,13 +1026,13 @@ function updateRow() {
   if (!u.supported) {
     desc = 'Updates work in the installed version of SportsChud. This copy is running from source.';
   } else if (u.installing) {
-    desc = `Download finished. SportsChud is closing now so the installer can replace it, then the installer opens. You'll be asked for administrator permission.`;
-    btn = '<button class="ubtn" disabled>Closing…</button>';
+    desc = `The installer is open (Windows may ask for administrator permission). SportsChud stays open until you quit it; quitting now closes everything, including the tray icon, so the installer can finish.`;
+    btn = '<button class="ubtn" id="updInstall">Open installer again</button>';
   } else if (u.downloading) {
-    desc = `Downloading v${esc(u.version)}… ${u.progress}%. SportsChud will close and open the installer when it finishes.`;
+    desc = `Downloading v${esc(u.version)}… ${u.progress}%. The installer opens when it finishes.`;
     btn = '<button class="ubtn" disabled>Downloading…</button>';
   } else if (u.available) {
-    desc = `Version ${esc(u.version)} is available (you have v${esc(u.current)}). SportsChud will close and open the installer.${u.error ? ' ' + esc(u.error) : ''}`;
+    desc = `Version ${esc(u.version)} is available (you have v${esc(u.current)}). SportsChud downloads it and opens the installer; it keeps running meanwhile.${u.error ? ' ' + esc(u.error) : ''}`;
     btn = '<button class="ubtn" id="updInstall">Install update</button>';
   } else if (u.checking) {
     desc = 'Checking for updates…';
