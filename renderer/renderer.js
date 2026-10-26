@@ -232,27 +232,29 @@ function renderScores() {
   }
   view.innerHTML = html || `<div class="empty"><h3>No games right now</h3><p>Your teams don't have games today. Check Schedules for what's coming.</p></div>`;
   view.querySelectorAll('.card[data-gid]').forEach((c) => {
-    c.onclick = () => openDetail(c.dataset.gid);
-    c.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(c.dataset.gid); } };
+    c.onclick = () => openDetail(c.dataset.gid, 'scores');
+    c.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(c.dataset.gid, 'scores'); } };
   });
 }
 
-/* ---------- Live game panel (click a game in Scores) ---------- */
-// state.detail = { id, tab: 'sum' | 'box' | 'plays', data, error, loading, settled } while a game is open.
+/* ---------- Game panel (click a game in Scores or Recaps) ---------- */
+// state.detail = { id, from: 'scores' | 'recaps', game, tab: 'sum' | 'box' | 'plays', data, error, loading, settled } while a game is open.
+// From Scores the game is looked up live in state.games; from Recaps it is the finished game the card was built from (`game`).
 // The header numbers come from the live scoreboard feed (state.games); the line score, scoring summary,
 // box score and plays come from the per-game summary (api.gameDetail), refreshed every 15 s while the game is live.
 const DETAIL_REFRESH_MS = 15000;
 const stopDetailTimer = () => { clearInterval(state.detailTimer); state.detailTimer = null; };
-const detailGame = () => (state.detail ? state.games.find((g) => g.id === state.detail.id) : null);
+const detailGame = () => (!state.detail ? null : state.detail.from === 'recaps' ? state.detail.game : state.games.find((g) => g.id === state.detail.id));
+const renderOrigin = (from) => (from === 'recaps' ? renderRecaps() : renderScores());
 
-function openDetail(id) {
+function openDetail(id, from = 'scores', game = null) {
   stopDetailTimer();
-  const d = (state.detail = { id, tab: 'sum', data: null, error: null, loading: true, settled: false });
+  const d = (state.detail = { id, from, game, tab: 'sum', data: null, error: null, loading: true, settled: false });
   paintDetail();
   loadDetail();
   state.detailTimer = setInterval(() => {
     const g = detailGame();
-    if (state.detail !== d || !g || state.tab !== 'scores') return stopDetailTimer();
+    if (state.detail !== d || !g || state.tab !== d.from) return stopDetailTimer();
     if (document.hidden) return; // the window is in the tray: don't poll ESPN for nobody
     if (g.state === 'in' || !d.data || (g.state === 'post' && !d.settled)) loadDetail();
   }, DETAIL_REFRESH_MS);
@@ -260,8 +262,9 @@ function openDetail(id) {
 
 function closeDetail() {
   stopDetailTimer();
+  const from = state.detail && state.detail.from;
   state.detail = null;
-  if (state.tab === 'scores') renderScores();
+  if (from && state.tab === from) renderOrigin(from);
 }
 
 async function loadDetail() {
@@ -275,7 +278,7 @@ async function loadDetail() {
   d.loading = false;
   if (r && r.ok) { d.data = r; d.error = null; if (g.state === 'post') d.settled = true; }
   else d.error = (r && r.error) || 'ESPN did not answer';
-  if (state.tab === 'scores') paintDetail();
+  if (state.tab === d.from) paintDetail();
 }
 
 const detailWhen = (p) => [p.period, p.clock].filter(Boolean).join(' ');
@@ -360,11 +363,12 @@ function detailPlays(g, d) {
 function paintDetail() {
   const d = state.detail;
   const g = detailGame();
-  if (!d || !g) { state.detail = null; stopDetailTimer(); return renderScores(); } // the game left the feed: back to the list
-  titleEl.textContent = 'Scores';
+  if (!d || !g) { const from = d && d.from; state.detail = null; stopDetailTimer(); return renderOrigin(from); } // the game left the feed: back to the list
+  const origin = d.from === 'recaps' ? 'Recaps' : 'Scores';
+  titleEl.textContent = origin;
   subEl.textContent = `${g.away.name} at ${g.home.name}`;
   setActions([['sum', 'Summary'], ['box', 'Box score'], ['plays', 'Plays']], d.tab, (k) => { d.tab = k; paintDetail(); },
-    { items: [['back', '← Scores']], current: null, onPick: closeDetail });
+    { items: [['back', `← ${origin}`]], current: null, onPick: closeDetail });
 
   let body;
   if (!d.data) {
@@ -391,7 +395,7 @@ document.addEventListener('error', (e) => {
   const el = e.target;
   if (el && el.tagName === 'IMG') el.style[el.classList.contains('cimg') ? 'display' : 'visibility'] = el.classList.contains('cimg') ? 'none' : 'hidden';
 }, true);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.detail && state.tab === 'scores') closeDetail(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.detail && state.tab === state.detail.from) closeDetail(); });
 
 /* ---------- Schedules view (day agenda / week / month) ---------- */
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -1205,6 +1209,7 @@ async function renderRecaps() {
     $('#goTeams').onclick = () => setTab('teams');
     return;
   }
+  if (state.detail && state.detail.from === 'recaps') return paintDetail(); // a game is open
   const shown = shownFollows();
   if (!shown.length) { subEl.textContent = ''; return showAllHidden('Recaps'); }
   subEl.textContent = `Last ${RECAP_GAMES} finals for each of your teams`;
@@ -1238,7 +1243,7 @@ async function renderRecaps() {
   const card = (g, fol) => {
     const p = perspective(g, fol);
     const d = new Date(g.date).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-    return `<article class="rcard" style="--c:${p.mine.color || '#7c8cff'}">
+    return `<article class="rcard clickable" data-rid="${esc(g.id)}" tabindex="0" role="button" aria-label="Game details: ${esc(g.away.name)} at ${esc(g.home.name)}" style="--c:${p.mine.color || '#7c8cff'}">
       <div class="rhead"><span>${g.icon} ${esc(g.leagueName)} · ${esc(d)}</span><span class="rbadge ${p.cls}">${p.cls === 'W' ? 'WIN' : p.cls === 'L' ? 'LOSS' : 'FINAL'}</span></div>
       <div class="rscore">
         <div class="rt"><img src="${esc(g.away.logo)}" alt="" /><b>${esc(g.away.name)}</b><em>${g.away.score}</em></div>
@@ -1261,7 +1266,14 @@ async function renderRecaps() {
   } else {
     view.innerHTML = warn + `<div class="rgrid">${games.map((g) => card(g)).join('')}</div>`;
   }
-  view.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => api.openLink(b.dataset.open)));
+  view.querySelectorAll('[data-open]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); api.openLink(b.dataset.open); }));
+  // click a finished game for its stats (same panel as Scores)
+  const byId = new Map(games.map((g) => [g.id, g]));
+  view.querySelectorAll('.rcard[data-rid]').forEach((c) => {
+    const open = () => { const g = byId.get(c.dataset.rid); if (g) openDetail(g.id, 'recaps', g); };
+    c.onclick = (e) => { if (!e.target.closest('button')) open(); };
+    c.onkeydown = (e) => { if (e.target === c && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); open(); } };
+  });
 }
 
 /* ---------- Routing ---------- */

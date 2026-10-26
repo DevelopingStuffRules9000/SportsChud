@@ -339,6 +339,9 @@ a[data-open]:hover { text-decoration: underline; }
 /* ---------- Live game panel (click a game in Scores) ---------- */
 .card.clickable { cursor: pointer; }
 .card.clickable:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+.rcard.clickable { cursor: pointer; }
+.rcard.clickable:hover { border-color: var(--c, var(--amber)); }
+.rcard.clickable:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
 
 .dhero {
   position: relative; overflow: hidden; border-radius: var(--radius); padding: 20px 24px 22px; margin-bottom: 6px;
