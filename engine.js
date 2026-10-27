@@ -1,4 +1,4 @@
-const { LEAGUES, scoreboardUrl, standingsUrl, summaryUrl, rosterUrl, injuriesUrl, dayStr } = require('./leagues');
+const { LEAGUES, scoreboardUrl, standingsUrl, summaryUrl, rosterUrl, injuriesUrl, transactionsUrl, leadersUrl, seasonYear, teamsUrl, dayStr } = require('./leagues');
 
 const dayCache = new Map(); // `${league}:${YYYYMMDD}` -> { at, events }
 
@@ -719,7 +719,217 @@ function parseGameDetail(l, data) {
     }).filter((g) => g.rows.length)
   })).filter((p) => p.groups.length);
 
-  return { heads, teams, teamStats, scoring: scoringOut, plays: recent, players };
+  return { heads, teams, teamStats, scoring: scoringOut, plays: recent, players, winProb: parseWinProb(data, teams), leaders: parseGameLeaders(data) };
+}
+
+// Win probability from the summary feed: `winprobability` is one row per play (homeWinPercentage, as a fraction or
+// a percent depending on the sport), `predictor` is the pre-game projection. Returns null when there is neither.
+const pct = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+function parseWinProb(data, teams) {
+  const rows = objs(data.winprobability).map((r) => pct(r.homeWinPercentage)).filter((n) => n != null);
+  if (rows.length) {
+    const scale = rows.some((n) => n > 1) ? 1 : 100; // fractions (0..1) become percent
+    const all = rows.map((n) => Math.max(0, Math.min(100, n * scale)));
+    const stride = Math.max(1, Math.ceil(all.length / 60)); // a small trend line is enough
+    const trend = all.filter((_, i) => i % stride === 0);
+    if (trend[trend.length - 1] !== all[all.length - 1]) trend.push(all[all.length - 1]);
+    const home = all[all.length - 1];
+    return { home: Math.round(home * 10) / 10, away: Math.round((100 - home) * 10) / 10, trend, live: true };
+  }
+  const pred = data.predictor && typeof data.predictor === 'object' ? data.predictor : null;
+  if (pred) {
+    const h = pct(pred.homeTeam && pred.homeTeam.gameProjection);
+    const a = pct(pred.awayTeam && pred.awayTeam.gameProjection);
+    if (h != null || a != null) {
+      const home = h != null ? h : 100 - a;
+      return { home: Math.round(home * 10) / 10, away: Math.round((100 - home) * 10) / 10, trend: [], live: false };
+    }
+  }
+  return null;
+}
+
+// Top performers per team ("leaders" in the summary feed: one entry per team, each with a few stat categories)
+const LEADER_CATS = 4;
+function parseGameLeaders(data) {
+  return objs(data.leaders).map((t) => ({
+    id: asTxt(t.team && t.team.id),
+    abbr: asTxt(t.team && t.team.abbreviation),
+    categories: objs(t.leaders).map((c) => {
+      const top = objs(c.leaders)[0];
+      if (!top) return null;
+      const a = top.athlete || {};
+      return {
+        label: asTxt(c.shortDisplayName || c.displayName || c.name),
+        name: asTxt(a.shortName || a.displayName || a.fullName),
+        pos: asTxt(a.position && a.position.abbreviation),
+        value: asTxt(top.displayValue != null ? top.displayValue : top.value),
+        detail: asTxt(top.summary || top.mainStat && top.mainStat.value)
+      };
+    }).filter((c) => c && c.name && c.value).slice(0, LEADER_CATS)
+  })).filter((t) => t.categories.length);
+}
+
+/* ---------- Pickups (trades and signings) ---------- */
+const txCache = new Map(); // league key -> { at, data }
+// What kind of move is it? Used for the little tag on each row.
+function txKind(text) {
+  const t = String(text || '').toLowerCase();
+  if (/\btrad(ed|e)\b|\bacquir/.test(t)) return 'Trade';
+  if (/waiv|claim/.test(t)) return 'Waivers';
+  if (/releas|cut\b|terminat|buyout|bought out/.test(t)) return 'Released';
+  if (/sign|extension|extend|agree|re-sign|contract/.test(t)) return 'Signing';
+  if (/recall|assign|call(ed)? up|optioned|send|sent down|reassign|promot/.test(t)) return 'Roster move';
+  if (/injur|placed on|reserve|activate|\bil\b|suspen/.test(t)) return 'Status';
+  if (/draft/.test(t)) return 'Draft';
+  return 'Move';
+}
+function parseTransactions(l, data) {
+  const list = objs(data && (data.transactions || data.items));
+  const items = list.map((t, i) => {
+    const team = t.team && typeof t.team === 'object' ? t.team : {};
+    const abbr = asTxt(team.abbreviation);
+    const text = asTxt(t.description || t.text || t.headline);
+    return {
+      id: asTxt(t.id) || `${i}`,
+      date: asTxt(t.date),
+      text,
+      kind: txKind(text),
+      teamId: asTxt(team.id),
+      team: asTxt(team.displayName || team.name),
+      abbr,
+      logo: (team.logos && team.logos[0] && team.logos[0].href) || asTxt(team.logo) || (abbr ? `https://a.espncdn.com/i/teamlogos/${l.league}/500/${abbr.toLowerCase()}.png` : '')
+    };
+  }).filter((t) => t.text);
+  items.sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0));
+  return { items: items.slice(0, 150) };
+}
+async function fetchTransactions(l, ttl = 600000) {
+  const hit = txCache.get(l.key);
+  if (hit && Date.now() - hit.at < ttl) return hit.data;
+  const res = await fetch(transactionsUrl(l), { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error(`${l.name} trades and signings: HTTP ${res.status}`);
+  const data = parseTransactions(l, await res.json());
+  txCache.set(l.key, { at: Date.now(), data });
+  return data;
+}
+
+/* ---------- Leaderboards (season leaders) ---------- */
+// ESPN's core API lists leaders per category with links ($ref) to the athlete and team. A category's top players are
+// resolved one category at a time (and cached), so opening the tab is one request plus a handful.
+const leadCache = new Map(); // league key -> { at, data: { season, categories: [{ name, label, abbr, leaders: [{ id, value, teamId }] }] } }
+const athleteCache = new Map(); // `${league}:${athleteId}` -> { at, a }
+const teamIdxCache = new Map(); // league key -> { at, map: teamId -> { abbr, name, logo } }
+const CORE_HOST = 'sports.core.api.espn.com';
+const safeRef = (ref) => {
+  try {
+    const u = new URL(String(ref).replace(/^http:/, 'https:'));
+    return u.protocol === 'https:' && u.hostname === CORE_HOST ? u.toString() : null; // only ever follow links to ESPN's core API
+  } catch (_) { return null; }
+};
+const idFromRef = (ref, seg) => { const m = new RegExp(`/${seg}/(\\d+)`).exec(String(ref || '')); return m ? m[1] : ''; };
+const LEADER_ROWS = 10;
+
+function parseLeaders(data) {
+  return objs(data && data.categories).map((c) => ({
+    name: asTxt(c.name),
+    label: asTxt(c.displayName || c.name),
+    abbr: asTxt(c.shortDisplayName || c.abbreviation),
+    leaders: objs(c.leaders).slice(0, LEADER_ROWS).map((x) => ({
+      id: idFromRef(x.athlete && x.athlete.$ref, 'athletes'),
+      teamId: idFromRef(x.team && x.team.$ref, 'teams'),
+      ref: x.athlete && x.athlete.$ref ? String(x.athlete.$ref) : '',
+      value: asTxt(x.displayValue != null ? x.displayValue : x.value)
+    })).filter((x) => x.id && x.value)
+  })).filter((c) => c.name && c.leaders.length);
+}
+
+async function leagueTeamIndex(l) {
+  const hit = teamIdxCache.get(l.key);
+  if (hit && Date.now() - hit.at < 24 * 3600000) return hit.map;
+  const map = new Map();
+  try {
+    const res = await fetch(teamsUrl(l), { signal: AbortSignal.timeout(10000) });
+    if (res.ok) {
+      const j = await res.json();
+      const list = objs(j && j.sports && j.sports[0] && j.sports[0].leagues && j.sports[0].leagues[0] && j.sports[0].leagues[0].teams);
+      for (const { team: t } of list.filter((x) => x.team)) {
+        map.set(asTxt(t.id), { abbr: asTxt(t.abbreviation), name: asTxt(t.displayName), logo: asTxt(t.logos && t.logos[0] && t.logos[0].href) });
+      }
+    }
+  } catch (_) {}
+  if (map.size) teamIdxCache.set(l.key, { at: Date.now(), map });
+  return map;
+}
+
+async function fetchLeaderCategories(l, ttl = 900000) {
+  const hit = leadCache.get(l.key);
+  if (hit && Date.now() - hit.at < ttl) return hit.data;
+  const year = seasonYear(l);
+  let lastErr = null;
+  for (const y of [year, year - 1]) { // before the season starts ESPN may only have last year's numbers
+    try {
+      const res = await fetch(leadersUrl(l, y), { signal: AbortSignal.timeout(12000) });
+      if (!res.ok) throw new Error(`${l.name} leaders: HTTP ${res.status}`);
+      const categories = parseLeaders(await res.json());
+      if (!categories.length) throw new Error(`${l.name} has no leaders listed yet`);
+      const data = { season: y, categories };
+      leadCache.set(l.key, { at: Date.now(), data });
+      return data;
+    } catch (err) { lastErr = err; }
+  }
+  throw lastErr || new Error('No leaders');
+}
+
+async function fetchAthlete(l, entry) {
+  const ck = `${l.key}:${entry.id}`;
+  const hit = athleteCache.get(ck);
+  if (hit && Date.now() - hit.at < 24 * 3600000) return hit.a;
+  let a = { name: '', pos: '', headshot: '', link: '' };
+  const url = safeRef(entry.ref);
+  if (url) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (res.ok) {
+        const j = await res.json();
+        a = {
+          name: asTxt(j.displayName || j.fullName || j.shortName),
+          pos: asTxt(j.position && j.position.abbreviation),
+          headshot: asTxt(j.headshot && j.headshot.href),
+          link: playerCard(j),
+          teamId: idFromRef(j.team && j.team.$ref, 'teams')
+        };
+        athleteCache.set(ck, { at: Date.now(), a });
+      }
+    } catch (_) {}
+  }
+  return a;
+}
+
+// Runs fn over items, a few at a time
+async function pool(items, size, fn) {
+  const out = new Array(items.length);
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(size, items.length) }, async () => {
+    while (i < items.length) { const n = i++; out[n] = await fn(items[n], n); }
+  }));
+  return out;
+}
+
+// One league's leaderboard: the list of categories plus the rows of the one asked for (the first by default)
+async function fetchLeaderboard(l, catName) {
+  const { season, categories } = await fetchLeaderCategories(l);
+  const cat = categories.find((c) => c.name === catName) || categories[0];
+  const [teams, athletes] = await Promise.all([leagueTeamIndex(l), pool(cat.leaders, 6, (e) => fetchAthlete(l, e))]);
+  const rows = cat.leaders.map((e, i) => {
+    const a = athletes[i] || {};
+    const t = teams.get(e.teamId || a.teamId || '') || {};
+    return {
+      rank: i + 1, name: a.name || `Player ${e.id}`, pos: a.pos || '', headshot: a.headshot || '', link: a.link || '',
+      teamId: e.teamId || a.teamId || '', team: t.abbr || '', teamLogo: t.logo || (t.abbr ? `https://a.espncdn.com/i/teamlogos/${l.league}/500/${t.abbr.toLowerCase()}.png` : ''),
+      value: e.value
+    };
+  });
+  return { season, categories: categories.map((c) => ({ name: c.name, label: c.label, abbr: c.abbr })), category: { name: cat.name, label: cat.label, rows } };
 }
 
 const detailCache = new Map(); // `${league}:${eventId}` -> { at, data }
@@ -1026,4 +1236,4 @@ class Engine {
   }
 }
 
-module.exports = { Engine, parseEvent, periodInfo, fetchDays, fetchStandings, standingsSnapshot, standingsChanges, parseScoringPlays, playsBetween, cleanPlayText, parseGameDetail, fetchGameDetail, isPostseason, fetchPlayoffs, followedAlive, playoffsOutcome, fetchOutTeams, isInSeason, fetchRoster, fetchInjuries, parseRoster, parseInjuries };
+module.exports = { parseTransactions, txKind, fetchTransactions, parseLeaders, fetchLeaderboard, Engine, parseEvent, periodInfo, fetchDays, fetchStandings, standingsSnapshot, standingsChanges, parseScoringPlays, playsBetween, cleanPlayText, parseGameDetail, parseWinProb, parseGameLeaders, fetchGameDetail, isPostseason, fetchPlayoffs, followedAlive, playoffsOutcome, fetchOutTeams, isInSeason, fetchRoster, fetchInjuries, parseRoster, parseInjuries };

@@ -28,6 +28,10 @@ const state = {
   rosterQuery: '',
   injLeague: null,
   injScope: 'mine',
+  pickLeagueKey: null, // Pickups
+  pickScope: 'all',
+  lbLeague: null, // Leaderboards
+  lbCat: {},
   playoffLeagues: [],
   version: '',
   activeLeagues: null, // keys of leagues in season (null until known)
@@ -107,7 +111,7 @@ const noFollowedHtml = (what) => `<div class="empty"><h3>Pick your teams</h3><p>
 const validLeague = (cur, list) => (list.some((l) => l.key === cur) ? cur : list[0].key);
 
 // Tabs whose contents depend on the Autohide settings (Roster never does)
-const HIDING_TABS = ['teams', 'scores', 'schedule', 'recaps', 'standings', 'injuries'];
+const HIDING_TABS = ['teams', 'scores', 'schedule', 'recaps', 'standings', 'injuries', 'pickups', 'leaderboards'];
 
 async function refreshSeasonStatus() {
   let list;
@@ -312,6 +316,40 @@ function detailHero(g, d) {
   </section>`;
 }
 
+// Win probability: a bar (away | home) plus, once the game has plays, the home team's chance over time
+function detailWinProb(g, d) {
+  const wp = d.data.winProb;
+  if (!wp) return '';
+  const away = Math.max(0, Math.min(100, wp.away)), home = Math.max(0, Math.min(100, wp.home));
+  const fmt = (n) => (Math.round(n * 10) / 10).toString().replace(/\.0$/, '') + '%';
+  let spark = '';
+  if (wp.trend && wp.trend.length > 1) {
+    const n = wp.trend.length;
+    const pts = wp.trend.map((v, i) => `${((i / (n - 1)) * 100).toFixed(2)},${(100 - v).toFixed(2)}`).join(' ');
+    spark = `<svg class="wpline" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="${esc(g.home.abbr)} win probability over the game">
+      <line x1="0" y1="50" x2="100" y2="50" class="wpmid" vector-effect="non-scaling-stroke" /><polyline points="${pts}" class="wpgraph" vector-effect="non-scaling-stroke" /></svg>
+      <div class="wplegend"><span>${esc(g.home.abbr)} chance over the game</span><span>${esc(g.away.abbr)} ↓ · ↑ ${esc(g.home.abbr)}</span></div>`;
+  }
+  return `<section class="dwp" style="--a:${g.away.color || '#7c8cff'};--h:${g.home.color || '#3de0c0'}">
+    <h2>${wp.live ? (g.state === 'post' ? 'Win probability' : 'Win probability now') : 'Pre-game projection'}</h2>
+    <div class="wpbar" role="img" aria-label="${esc(g.away.abbr)} ${fmt(away)}, ${esc(g.home.abbr)} ${fmt(home)}">
+      <span class="wpa" style="width:${away}%"></span><span class="wph" style="width:${home}%"></span></div>
+    <div class="wpnums"><b>${esc(g.away.abbr)} ${fmt(away)}</b><b>${fmt(home)} ${esc(g.home.abbr)}</b></div>${spark}
+  </section>`;
+}
+
+// Top performers of each team (goals/assists, points/rebounds, passing/rushing yards ...)
+function detailLeaders(g, d) {
+  const lead = d.data.leaders || [];
+  const cards = [g.away, g.home].map((team) => {
+    const t = lead.find((x) => x.id === team.id);
+    if (!t) return '';
+    return `<div class="dlead"><header><img src="${esc(team.logo)}" alt="" /><b>${esc(team.abbr)}</b></header>
+      ${t.categories.map((c) => `<div class="dleadrow"><span class="dlk">${esc(c.label)}</span><span class="dln">${esc(c.name)}${c.pos ? ` <small>${esc(c.pos)}</small>` : ''}</span><span class="dlv">${esc(c.value)}</span></div>`).join('')}</div>`;
+  }).join('');
+  return cards ? `<h2>${g.state === 'pre' ? 'Season leaders' : 'Game leaders'}</h2><div class="dleads">${cards}</div>` : '';
+}
+
 function detailSummary(g, d) {
   const data = d.data;
   let stats = '';
@@ -324,7 +362,7 @@ function detailSummary(g, d) {
     }).join('');
     if (rows) stats = `<h2>Team stats</h2><table class="stbl dstats"><thead><tr><th class="tmh"></th><th>${esc(g.away.abbr)}</th><th>${esc(g.home.abbr)}</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
-  let html = '<h2>Scoring summary</h2>';
+  let html = detailLeaders(g, d) + '<h2>Scoring summary</h2>';
   html += data.scoring.length
     ? `<div class="dlist">${data.scoring.map((p) => `
         <div class="dplay scoring">
@@ -334,7 +372,7 @@ function detailSummary(g, d) {
         </div>`).join('')}</div>`
     : `<p class="dnone">${g.state === 'pre' ? "The game hasn't started yet." : 'No scoring yet.'}</p>`;
   // Team stats on the left (30%), scoring summary on the right (70%); without team stats the summary takes the full width
-  return `<div class="dsum${stats ? '' : ' solo'}">${stats ? `<section class="dsum-stats">${stats}</section>` : ''}<section class="dsum-score">${html}</section></div>`;
+  return detailWinProb(g, d) + `<div class="dsum${stats ? '' : ' solo'}">${stats ? `<section class="dsum-stats">${stats}</section>` : ''}<section class="dsum-score">${html}</section></div>`;
 }
 
 function detailBox(g, d) {
@@ -934,6 +972,117 @@ const shortDate = (s) => {
   return isNaN(d) ? '' : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 };
 
+/* ---------- Pickups: trades and signings ---------- */
+function dayLabel(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return 'Earlier';
+  const start = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((start(new Date()) - start(d)) / 86400000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Yesterday';
+  return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: diff > 300 ? 'numeric' : undefined });
+}
+
+async function renderPickups() {
+  titleEl.textContent = 'Pickups';
+  subEl.textContent = '';
+  const leagues = visibleLeagues((l) => !l.noTransactions, true); // ESPN has no trades feed for college football
+  if (!leagues.length) {
+    if (state.settings.follows.length && shownFollows().length !== state.settings.follows.length) return showAllHidden('Pickups');
+    view.innerHTML = noFollowedHtml('its trades and signings');
+    $('#goTeams').onclick = () => setTab('teams');
+    return;
+  }
+  state.pickLeagueKey = validLeague(state.pickLeagueKey, leagues);
+  const key = state.pickLeagueKey;
+  const lg = leagueOf(key);
+  setActions([['mine', 'My teams'], ['all', 'Whole league']], state.pickScope, (k) => { state.pickScope = k; renderPickups(); }, {
+    items: leagues.map((x) => [x.key, `${x.icon} ${esc(x.name)}`]),
+    current: key,
+    onPick: (k) => { state.pickLeagueKey = k; renderPickups(); }
+  });
+  const bind = () => {
+    const retry = $('#pkRetry'); if (retry) retry.onclick = () => renderPickups();
+    const all = $('#pkAll'); if (all) all.onclick = () => { state.pickScope = 'all'; renderPickups(); };
+  };
+  view.innerHTML = `<div class="empty"><p>Loading trades and signings…</p></div>`;
+  let data;
+  try { data = await api.pickups(key); } catch (e) { data = { ok: false, error: e.message, items: [] }; }
+  if (state.tab !== 'pickups' || state.pickLeagueKey !== key) return;
+  if (!data.ok) {
+    view.innerHTML = `<div class="empty"><h3>Pickups unavailable</h3><p>${esc(data.error || 'ESPN returned nothing right now.')}</p><button class="cta" id="pkRetry">Try again</button></div>`;
+    bind();
+    return;
+  }
+  const mine = (t) => !!t.teamId && isShownFollowed(key, t.teamId);
+  let items = data.items;
+  if (state.pickScope === 'mine') items = items.filter(mine);
+  subEl.textContent = `${lg.name} · ${items.length} move${items.length === 1 ? '' : 's'}`;
+  if (!items.length) {
+    const follows = shownFollows().some((f) => f.league === key);
+    view.innerHTML = `<div class="empty"><h3>${state.pickScope === 'mine' ? 'Nothing new for your teams' : 'No moves listed'}</h3>
+      <p>${state.pickScope === 'mine' ? (follows ? `None of your ${esc(lg.name)} teams have a recent trade or signing.` : 'Follow a team on the Teams tab, or look at the whole league.') : 'ESPN has no recent trades or signings for this league.'}</p>
+      ${state.pickScope === 'mine' ? '<button class="cta" id="pkAll">Show whole league</button>' : ''}</div>`;
+    bind();
+    return;
+  }
+  const groups = [];
+  for (const t of items) {
+    const label = dayLabel(t.date);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(t); else groups.push({ label, items: [t] });
+  }
+  view.innerHTML = groups.map((g) => `<h2>${esc(g.label)}</h2><div class="pklist">${g.items.map((t) => `
+    <div class="pkrow ${mine(t) ? 'mine' : ''}">
+      <img src="${esc(t.logo)}" alt="" />
+      <div class="pkb"><span class="pktxt">${esc(t.text)}</span><small>${esc(t.team)}${mine(t) ? ' · Following' : ''}</small></div>
+      <span class="pkkind k-${esc(t.kind.toLowerCase().replace(/\s+/g, '-'))}">${esc(t.kind)}</span>
+    </div>`).join('')}</div>`).join('');
+  bind();
+}
+
+/* ---------- Leaderboards: season leaders ---------- */
+async function renderLeaderboards() {
+  titleEl.textContent = 'Leaderboards';
+  subEl.textContent = '';
+  const leagues = visibleLeagues(() => true, true);
+  if (!leagues.length) {
+    if (state.settings.follows.length && shownFollows().length !== state.settings.follows.length) return showAllHidden('Leaderboards');
+    view.innerHTML = noFollowedHtml('its season leaders');
+    $('#goTeams').onclick = () => setTab('teams');
+    return;
+  }
+  state.lbLeague = validLeague(state.lbLeague, leagues);
+  const key = state.lbLeague;
+  const lg = leagueOf(key);
+  const wanted = state.lbCat[key] || '';
+  const picker = { items: leagues.map((x) => [x.key, `${x.icon} ${esc(x.name)}`]), current: key, onPick: (k) => { state.lbLeague = k; renderLeaderboards(); } };
+  setActions(null, null, null, picker);
+  const bind = () => { const retry = $('#lbRetry'); if (retry) retry.onclick = () => renderLeaderboards(); };
+  view.innerHTML = `<div class="empty"><p>Loading ${esc(lg.name)} leaders…</p></div>`;
+  let data;
+  try { data = await api.leaders(key, wanted); } catch (e) { data = { ok: false, error: e.message, categories: [] }; }
+  if (state.tab !== 'leaderboards' || state.lbLeague !== key) return;
+  if (!data.ok || !data.category) {
+    view.innerHTML = `<div class="empty"><h3>Leaderboards unavailable</h3><p>${esc(data.error || 'ESPN returned no leaders right now.')}</p><button class="cta" id="lbRetry">Try again</button></div>`;
+    bind();
+    return;
+  }
+  state.lbCat[key] = data.category.name;
+  setActions(data.categories.map((c) => [c.name, esc(c.abbr || c.label)]), data.category.name, (k) => { state.lbCat[key] = k; renderLeaderboards(); }, picker);
+  subEl.textContent = `${lg.name} · ${data.category.label} · ${data.season} season`;
+  const mine = (r) => !!r.teamId && isShownFollowed(key, r.teamId);
+  const rows = data.category.rows;
+  view.innerHTML = `<table class="stbl lbtbl"><thead><tr><th class="rk">#</th><th class="tmh">Player</th><th class="tmh">Team</th><th>${esc(data.category.label)}</th></tr></thead><tbody>${rows.map((r) => `
+    <tr class="${mine(r) ? 'mine' : ''}"><td class="rk">${r.rank}</td>
+      <td class="lt"><div class="tm"><img class="hs" src="${esc(r.headshot)}" alt="" />${r.link ? `<a href="#" data-open="${esc(r.link)}">${esc(r.name)}</a>` : `<span>${esc(r.name)}</span>`}${r.pos ? ` <small>${esc(r.pos)}</small>` : ''}</div></td>
+      <td class="lt"><div class="tm"><img src="${esc(r.teamLogo)}" alt="" /><span>${esc(r.team)}</span></div></td>
+      <td class="tot">${esc(r.value)}</td></tr>`).join('')}</tbody></table>
+    <p class="dnone">Highlighted rows are players on teams you follow. ${esc(data.categories.length)} categories: pick one above.</p>`;
+  bind();
+  view.querySelectorAll('[data-open]').forEach((a) => (a.onclick = (e) => { e.preventDefault(); api.openLink(a.dataset.open); }));
+}
+
 async function renderInjuries() {
   titleEl.textContent = 'Injuries';
   subEl.textContent = '';
@@ -1124,6 +1273,8 @@ const NAV_ITEMS = {
   playoffs: ['❖', 'Playoffs'],
   roster: ['☰', 'Roster'],
   injuries: ['✚', 'Injuries'],
+  pickups: ['⇄', 'Pickups'],
+  leaderboards: ['♛', 'Leaderboards'],
   schedule: ['▦', 'Schedules'],
   teams: ['★', 'Teams'],
   activity: ['✦', 'Activity']
@@ -1286,6 +1437,8 @@ function render() {
   else if (state.tab === 'playoffs') renderPlayoffs();
   else if (state.tab === 'roster') renderRoster();
   else if (state.tab === 'injuries') renderInjuries();
+  else if (state.tab === 'pickups') renderPickups();
+  else if (state.tab === 'leaderboards') renderLeaderboards();
   else if (state.tab === 'recaps') renderRecaps();
   else if (state.tab === 'teams') renderTeams();
   else if (state.tab === 'settings') renderSettings();

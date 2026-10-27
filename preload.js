@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('api', {
   roster: (key, teamId) => ipcRenderer.invoke('roster', { key, teamId }),
   injuries: (key) => ipcRenderer.invoke('injuries', key),
   gameDetail: (league, eventId) => ipcRenderer.invoke('game:detail', { league, eventId }),
+  pickups: (key) => ipcRenderer.invoke('pickups', key),
+  leaders: (key, category) => ipcRenderer.invoke('leaders', { key, category }),
   getActivity: () => ipcRenderer.invoke('activity:get'),
   openLink: (url) => ipcRenderer.invoke('open:link', url),
   resetApp: () => ipcRenderer.invoke('app:reset'),

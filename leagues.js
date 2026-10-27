@@ -6,6 +6,7 @@
 //   scoreboardQuery extra query string for the scoreboard (college football needs groups=80 for all FBS games)
 //   teamsQuery      extra query string for the teams list
 //   noInjuries      ESPN has no injury feed for this league (hidden from the Injuries tab)
+//   noTransactions  ESPN has no trades/signings feed for this league (hidden from the Pickups tab)
 const LEAGUES = [
   { key: 'nhl', sport: 'hockey', league: 'nhl', kind: 'hockey', name: 'NHL', icon: '🏒',
     sortStat: 'points',
@@ -17,7 +18,7 @@ const LEAGUES = [
     standingsLevel: 3, sortStat: 'winPercent',
     cols: [['W', 'wins'], ['L', 'losses'], ['T', 'ties'], ['PCT', 'winPercent'], ['PF', 'pointsFor'], ['PA', 'pointsAgainst'], ['DIFF', 'pointDifferential'], ['STRK', 'streak']] },
   { key: 'ncaaf', sport: 'football', league: 'college-football', kind: 'football', name: 'NCAAF', icon: '🏟️',
-    sortStat: 'winPercent', scoreboardQuery: '&groups=80', teamsQuery: '&groups=80', noInjuries: true,
+    sortStat: 'winPercent', scoreboardQuery: '&groups=80', teamsQuery: '&groups=80', noInjuries: true, noTransactions: true,
     cols: [['W', 'wins'], ['L', 'losses'], ['PCT', 'winPercent'], ['PF', 'pointsFor'], ['PA', 'pointsAgainst'], ['DIFF', 'pointDifferential'], ['STRK', 'streak']] },
   { key: 'nba', sport: 'basketball', league: 'nba', kind: 'basketball', name: 'NBA', icon: '🏀',
     sortStat: 'winPercent',
@@ -42,6 +43,20 @@ const summaryUrl = (l, eventId) => `${BASE}/${l.sport}/${l.league}/summary?event
 const rosterUrl = (l, teamId) => `${BASE}/${l.sport}/${l.league}/teams/${encodeURIComponent(teamId)}/roster`;
 const injuriesUrl = (l) => `${BASE}/${l.sport}/${l.league}/injuries`;
 
+// Trades, signings, waivers ...
+const transactionsUrl = (l) => `${BASE}/${l.sport}/${l.league}/transactions?limit=100`;
+
+// Season leaders come from ESPN's core API (categories per sport: goals, passing yards ...). The season is named by the
+// year it ends (NHL/NBA 2026-27 is 2027), by the year it starts (NFL/college football, which still counts January as the
+// previous season) or by the calendar year (MLB). type 2 is the regular season.
+const seasonYear = (l, d = new Date()) => {
+  const y = d.getFullYear(), m = d.getMonth() + 1;
+  if (l.kind === 'hockey' || l.kind === 'basketball') return m >= 9 ? y + 1 : y;
+  if (l.kind === 'football') return m >= 3 ? y : y - 1;
+  return y;
+};
+const CORE = 'https://sports.core.api.espn.com/v2/sports';
+const leadersUrl = (l, year) => `${CORE}/${l.sport}/leagues/${l.league}/seasons/${year}/types/2/leaders`;
 const teamsUrl = (l) => `${BASE}/${l.sport}/${l.league}/teams?limit=${l.teamsQuery ? 500 : 100}${l.teamsQuery || ''}`;
 
-module.exports = { LEAGUES, scoreboardUrl, standingsUrl, summaryUrl, rosterUrl, injuriesUrl, teamsUrl, dayStr };
+module.exports = { LEAGUES, scoreboardUrl, standingsUrl, summaryUrl, rosterUrl, injuriesUrl, transactionsUrl, leadersUrl, seasonYear, CORE, teamsUrl, dayStr };

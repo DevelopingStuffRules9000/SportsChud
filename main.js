@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, Notification, shell, Tray, Menu, nativeImag
 const path = require('path');
 const fs = require('fs');
 const { LEAGUES, teamsUrl, dayStr } = require('./leagues');
-const { Engine, parseEvent, fetchDays, fetchStandings, isPostseason, fetchPlayoffs, followedAlive, fetchOutTeams, isInSeason, fetchRoster, fetchInjuries, fetchGameDetail } = require('./engine');
+const { Engine, parseEvent, fetchDays, fetchStandings, isPostseason, fetchPlayoffs, followedAlive, fetchOutTeams, isInSeason, fetchRoster, fetchInjuries, fetchGameDetail, fetchTransactions, fetchLeaderboard } = require('./engine');
 
 const { Updater } = require('./updater');
 
@@ -565,6 +565,21 @@ app.whenReady().then(() => {
     if (!l) return { ok: false, error: 'Unknown league', teams: [] };
     try { return { ok: true, ...(await fetchInjuries(l)) }; }
     catch (err) { return { ok: false, error: err.message, teams: [] }; }
+  });
+  // Trades and signings (Pickups tab)
+  ipcMain.handle('pickups', async (_, key) => {
+    const l = LEAGUES.find((x) => x.key === key);
+    if (!l || l.noTransactions) return { ok: false, error: 'ESPN has no trades and signings feed for this league', items: [] };
+    try { return { ok: true, ...(await fetchTransactions(l)) }; }
+    catch (err) { return { ok: false, error: err.message, items: [] }; }
+  });
+  // Season leaders (Leaderboards tab); `category` is optional (the first one by default)
+  ipcMain.handle('leaders', async (_, arg) => {
+    const { key, category } = arg && typeof arg === 'object' ? arg : {};
+    const l = LEAGUES.find((x) => x.key === key);
+    if (!l) return { ok: false, error: 'Unknown league', categories: [] };
+    try { return { ok: true, ...(await fetchLeaderboard(l, typeof category === 'string' ? category.slice(0, 60) : '')) }; }
+    catch (err) { return { ok: false, error: err.message, categories: [] }; }
   });
   ipcMain.handle('activity:get', () => activity);
   ipcMain.handle('notify:test', () =>
