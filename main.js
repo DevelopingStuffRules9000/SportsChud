@@ -573,7 +573,7 @@ app.whenReady().then(() => {
     try { return { ok: true, ...(await fetchTransactions(l)) }; }
     catch (err) { return { ok: false, error: err.message, items: [] }; }
   });
-  // Season leaders (Leaderboards tab); `category` is optional (the first one by default)
+  // Season leaders (Leaders tab); `category` is optional (the first one by default)
   ipcMain.handle('leaders', async (_, arg) => {
     const { key, category } = arg && typeof arg === 'object' ? arg : {};
     const l = LEAGUES.find((x) => x.key === key);

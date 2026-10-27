@@ -30,7 +30,7 @@ const state = {
   injScope: 'mine',
   pickLeagueKey: null, // Pickups
   pickScope: 'all',
-  lbLeague: null, // Leaderboards
+  lbLeague: null, // Leaders
   lbCat: {},
   playoffLeagues: [],
   version: '',
@@ -1041,13 +1041,13 @@ async function renderPickups() {
   bind();
 }
 
-/* ---------- Leaderboards: season leaders ---------- */
+/* ---------- Leaders: season leaders ---------- */
 async function renderLeaderboards() {
-  titleEl.textContent = 'Leaderboards';
+  titleEl.textContent = 'Leaders';
   subEl.textContent = '';
   const leagues = visibleLeagues(() => true, true);
   if (!leagues.length) {
-    if (state.settings.follows.length && shownFollows().length !== state.settings.follows.length) return showAllHidden('Leaderboards');
+    if (state.settings.follows.length && shownFollows().length !== state.settings.follows.length) return showAllHidden('Leaders');
     view.innerHTML = noFollowedHtml('its season leaders');
     $('#goTeams').onclick = () => setTab('teams');
     return;
@@ -1064,7 +1064,7 @@ async function renderLeaderboards() {
   try { data = await api.leaders(key, wanted); } catch (e) { data = { ok: false, error: e.message, categories: [] }; }
   if (state.tab !== 'leaderboards' || state.lbLeague !== key) return;
   if (!data.ok || !data.category) {
-    view.innerHTML = `<div class="empty"><h3>Leaderboards unavailable</h3><p>${esc(data.error || 'ESPN returned no leaders right now.')}</p><button class="cta" id="lbRetry">Try again</button></div>`;
+    view.innerHTML = `<div class="empty"><h3>Leaders unavailable</h3><p>${esc(data.error || 'ESPN returned no leaders right now.')}</p><button class="cta" id="lbRetry">Try again</button></div>`;
     bind();
     return;
   }
@@ -1274,7 +1274,7 @@ const NAV_ITEMS = {
   roster: ['☰', 'Roster'],
   injuries: ['✚', 'Injuries'],
   pickups: ['⇄', 'Pickups'],
-  leaderboards: ['♛', 'Leaderboards'],
+  leaderboards: ['♛', 'Leaders'], // (the key stays 'leaderboards' so a saved sidebar order keeps working)
   schedule: ['▦', 'Schedules'],
   teams: ['★', 'Teams'],
   activity: ['✦', 'Activity']

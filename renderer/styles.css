@@ -319,7 +319,7 @@ a[data-open]:hover { text-decoration: underline; }
 .st { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; background: rgba(255, 255, 255, 0.12); color: var(--text); white-space: nowrap; }
 .st.out { background: rgba(255, 90, 110, 0.25); color: #ffb3bd; }
 .st.dtd { background: rgba(255, 194, 77, 0.22); color: var(--amber); }
-.injgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 18px; align-items: start; }
+.injgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 18px; align-items: start; }
 .injteam { border-radius: 20px; border: 1px solid var(--line); background: linear-gradient(160deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)); padding: 6px 16px 10px; }
 .injteam.mine { border-color: rgba(255, 194, 77, 0.7); }
 .injteam header { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
