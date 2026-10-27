@@ -129,7 +129,6 @@ h2:first-child { margin-top: 6px; }
 .foot b { color: var(--text); font-weight: 700; }
 
 /* ---------- Teams ---------- */
-.chips { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }
 .chip { padding: 10px 18px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.05); cursor: pointer; font-size: 14px; font-weight: 600; color: var(--muted); transition: all 0.2s; }
 .chip:hover { color: var(--text); background: rgba(255, 255, 255, 0.12); transform: translateY(-1px); }
 .chip.on { color: #1b1030; background: linear-gradient(135deg, var(--amber), var(--orange)); border-color: transparent; box-shadow: 0 10px 24px -10px rgba(255, 138, 42, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.5); }
@@ -200,7 +199,6 @@ select option { background: #262626; }
 
 /* schedule: view switcher, agenda, week */
 .calbar .spacer { flex: 1; }
-.viewsw { margin: 0; }
 .calnote.warn { color: var(--amber); }
 .ha { font-weight: 800; font-size: 10px; letter-spacing: 0.8px; }
 .ha.home { color: #3de0c0; }
@@ -280,9 +278,6 @@ nav { display: flex; flex-direction: column; gap: 8px; }
 .dbtn:hover { background: rgba(255,84,112,0.3); }
 #resetbox { display: flex; gap: 8px; flex: none; align-items: center; }
 
-.seg { display: flex; flex: none; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; background: rgba(255,255,255,0.05); }
-.seg button { padding: 8px 18px; border: 0; background: transparent; color: var(--muted); font-weight: 700; font-size: 13px; cursor: pointer; }
-.seg button.on { color: #1b1030; background: linear-gradient(135deg, var(--amber), var(--orange)); }
 
 /* ---------- Standings + Playoffs ---------- */
 .stgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(560px, 1fr)); gap: 8px 24px; align-items: start; }
@@ -302,7 +297,6 @@ nav { display: flex; flex-direction: column; gap: 8px; }
 
 /* ---------- Roster + Injuries ---------- */
 .chip .cimg { width: 20px; height: 20px; object-fit: contain; vertical-align: middle; margin-right: 8px; }
-.chipgap { width: 18px; }
 .stgrid.one { grid-template-columns: 1fr; }
 .rhead { display: flex; align-items: center; gap: 14px; margin: 4px 0 6px; flex-wrap: wrap; }
 .rhead img { width: 48px; height: 48px; object-fit: contain; }
