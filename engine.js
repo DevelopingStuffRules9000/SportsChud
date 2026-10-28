@@ -724,7 +724,7 @@ function parseGameDetail(l, data) {
 
 // Win probability from the summary feed: `winprobability` is one row per play (homeWinPercentage, as a fraction or
 // a percent depending on the sport), `predictor` is the pre-game projection. Returns null when there is neither.
-const pct = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+const pct = (v) => { if (v == null || v === '') return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
 function parseWinProb(data, teams) {
   const rows = objs(data.winprobability).map((r) => pct(r.homeWinPercentage)).filter((n) => n != null);
   if (rows.length) {
@@ -775,9 +775,9 @@ const txCache = new Map(); // league key -> { at, data }
 function txKind(text) {
   const t = String(text || '').toLowerCase();
   if (/\btrad(ed|e)\b|\bacquir/.test(t)) return 'Trade';
-  if (/waiv|claim/.test(t)) return 'Waivers';
+  if (/waiv|claim|designated for assignment/.test(t)) return 'Waivers';
   if (/releas|cut\b|terminat|buyout|bought out/.test(t)) return 'Released';
-  if (/sign|extension|extend|agree|re-sign|contract/.test(t)) return 'Signing';
+  if (/\bsign(ed|s|ing)?\b|extension|extend|agree|contract/.test(t)) return 'Signing';
   if (/recall|assign|call(ed)? up|optioned|send|sent down|reassign|promot/.test(t)) return 'Roster move';
   if (/injur|placed on|reserve|activate|\bil\b|suspen/.test(t)) return 'Status';
   if (/draft/.test(t)) return 'Draft';

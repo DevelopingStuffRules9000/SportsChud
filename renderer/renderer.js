@@ -1181,6 +1181,7 @@ function updateRow() {
     desc = 'Updates work in the installed version of SportsChud. This copy is running from source.';
   } else if (u.installing) {
     desc = `The installer is open (Windows may ask for administrator permission). SportsChud stays open until you quit it; quitting now closes everything, including the tray icon, so the installer can finish.`;
+    if (u.error) desc += ' ' + esc(u.error);
     btn = '<button class="ubtn" id="updInstall">Open installer again</button>';
   } else if (u.downloading) {
     desc = `Downloading v${esc(u.version)}… ${u.progress}%. The installer opens when it finishes.`;
@@ -1228,7 +1229,7 @@ function renderSettings() {
   const row = ([k, title, desc]) => `
     <div class="setrow">
       <div><b>${title}</b><span>${desc}</span></div>
-      <button class="switch ${isOn(k) ? 'on' : ''}" data-set="${k}" role="switch" aria-checked="${isOn(k)}" aria-label="${title}"></button>
+      <button class="switch ${isOn(k) ? 'on' : ''}" data-set="${k}" role="switch" aria-checked="${isOn(k)}" aria-label="${esc(title)}"></button>
     </div>`;
   view.innerHTML = `<div class="setlist">
     <h3 class="sethead">Updates</h3>
@@ -1504,7 +1505,7 @@ function applyTestButton() { $('#test').hidden = !settingOn('showTestAlert'); }
   api.onUpdate((u) => {
     state.update = u;
     renderUpdBar();
-    if (state.tab === 'settings') renderSettings();
+    if (state.tab === 'settings' && !$('#resetYes')) renderSettings(); // don't wipe the open "erase everything?" prompt
   });
   renderUpdBar();
   buildNav();

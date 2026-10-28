@@ -588,10 +588,11 @@ app.whenReady().then(() => {
   ipcMain.handle('teams', async (_, key) => {
     const l = LEAGUES.find((x) => x.key === key);
     if (!l) throw new Error('Unknown league');
-    const res = await fetch(teamsUrl(l));
+    const res = await fetch(teamsUrl(l), { signal: AbortSignal.timeout(20000) });
     if (!res.ok) throw new Error(`ESPN answered ${res.status}`);
     const data = await res.json();
-    const teams = data.sports[0].leagues[0].teams.map(({ team: t }) => ({
+    const list = (((data.sports || [])[0] || {}).leagues || [])[0];
+    const teams = ((list && list.teams) || []).filter((x) => x && x.team).map(({ team: t }) => ({
       teamId: String(t.id),
       league: key,
       name: t.displayName,
