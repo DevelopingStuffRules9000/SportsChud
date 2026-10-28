@@ -52,7 +52,7 @@ const settingOn = (k) => (DEFAULT_ON.includes(k) ? state.settings[k] !== false :
 // Why a followed team is left out of Scores, Recaps, Standings, Schedules and Injuries (null = it is shown):
 //   'season': its sport's season and playoffs are over  ("Autohide out of season sports")
 //   'out':    the team is out of the season or playoffs ("Autohide teams that are out")
-// Nothing is hidden until the status is known. Roster and the Teams tab always show every team, and alerts
+// Nothing is hidden until the status is known. Roster and the Select tab always show every team, and alerts
 // are never affected.
 function hiddenReason(f) {
   if (settingOn('hideOffSeason') && state.activeLeagues && !state.activeLeagues.includes(f.league)) return 'season';
@@ -620,7 +620,7 @@ async function renderSchedule() {
 
 /* ---------- Teams view ---------- */
 async function renderTeams() {
-  titleEl.textContent = 'Teams';
+  titleEl.textContent = 'Select';
   subEl.textContent = 'Choose who to follow and what you want to hear about';
 
   state.pickLeague = validLeague(state.pickLeague, visibleLeagues());
@@ -1021,7 +1021,7 @@ async function renderPickups() {
   if (!items.length) {
     const follows = shownFollows().some((f) => f.league === key);
     view.innerHTML = `<div class="empty"><h3>${state.pickScope === 'mine' ? 'Nothing new for your teams' : 'No moves listed'}</h3>
-      <p>${state.pickScope === 'mine' ? (follows ? `None of your ${esc(lg.name)} teams have a recent trade or signing.` : 'Follow a team on the Teams tab, or look at the whole league.') : 'ESPN has no recent trades or signings for this league.'}</p>
+      <p>${state.pickScope === 'mine' ? (follows ? `None of your ${esc(lg.name)} teams have a recent trade or signing.` : 'Follow a team on the Select tab, or look at the whole league.') : 'ESPN has no recent trades or signings for this league.'}</p>
       ${state.pickScope === 'mine' ? '<button class="cta" id="pkAll">Show whole league</button>' : ''}</div>`;
     bind();
     return;
@@ -1131,7 +1131,7 @@ async function renderInjuries() {
   if (!teams.length) {
     const follows = shownFollows().some((f) => f.league === key);
     view.innerHTML = `<div class="empty"><h3>${follows ? 'All clear' : `No ${esc(lg.name)} teams followed`}</h3>
-      <p>${follows ? `None of your ${esc(lg.name)} teams have anyone on the injury report.` : 'Follow a team on the Teams tab, or look at the whole league.'}</p>
+      <p>${follows ? `None of your ${esc(lg.name)} teams have anyone on the injury report.` : 'Follow a team on the Select tab, or look at the whole league.'}</p>
       <button class="cta" id="injAll">Show whole league</button></div>`;
     bind();
     return;
@@ -1202,20 +1202,27 @@ function updateRow() {
 function renderSettings() {
   titleEl.textContent = 'Settings';
   subEl.textContent = `How SportsChud starts and runs${state.version ? ' · v' + state.version : ''}`;
-  const general = [
+  // Settings are grouped by what they do; each group gets a yellow heading
+  const updates = [
+    ['checkForUpdates', 'Check for updates automatically', 'Looks for a newer SportsChud on GitHub at startup and every few hours. It never installs anything until you click Install.']
+  ];
+  const startup = [
     ['launchAtStartup', 'Launch at startup', 'Open SportsChud automatically when you sign in to Windows.'],
     ['startSilently', 'Start silently', 'On startup, run in the background with no window. Open it from the tray icon. Needs "Keep running in tray".'],
-    ['keepInTray', 'Keep running in tray', 'Closing the window hides it to the tray so alerts keep coming. Quit from the tray icon.'],
+    ['keepInTray', 'Keep running in tray', 'Closing the window hides it to the tray so alerts keep coming. Quit from the tray icon.']
+  ];
+  const mini = [
     ['overlayEnabled', 'Mini scoreboard', 'A small always-on-top window with the score and clock of your live games. Drag it anywhere; it remembers where you left it. Also in the tray menu.'],
-    ['checkForUpdates', 'Check for updates automatically', 'Looks for a newer SportsChud on GitHub at startup and every few hours. It never installs anything until you click Install.'],
-    ['showTestAlert', 'Show "Send test alert" button', 'Adds a Send test alert button to the bottom of the sidebar, for checking that Windows notifications work. Off by default.']
+    ['overlayAutoHide', 'Autohide Mini scoreboard', 'Only show the mini scoreboard while one of your teams is playing a live game. Turn off to keep it on screen with a "No live games" message. Needs "Mini scoreboard" turned on.']
   ];
   const autohide = [
     ['playoffsAutoHide', 'Autohide Playoffs', 'Only show the Playoffs tab while one of your teams is still alive in a postseason. It disappears if your teams missed the playoffs or are eliminated. Turn off to always show it.'],
     ['activityAutoHide', 'Autohide Activity', 'Only show the Activity tab once the first alert of the session has been sent. Turn off to always show it.'],
     ['hideOffSeason', 'Autohide out of season sports', 'When a sport\'s season and playoffs are over (no games in the last couple of days or the next week and a half), take that sport and your teams in it out of Scores, Recaps, Standings, Schedules and Injuries. Roster and Teams still list them, and alerts keep working.'],
-    ['hideEliminated', 'Autohide teams that are out', 'When one of your teams is out of the season or the playoffs (it lost its last playoff series, missed the playoffs, or ESPN marks it eliminated), take that team out of Scores, Recaps, Standings, Schedules and Injuries. If that was your only team in a sport, the sport goes too. Roster and Teams still list it, and alerts keep working.'],
-    ['overlayAutoHide', 'Autohide Mini scoreboard', 'Only show the mini scoreboard while one of your teams is playing a live game. Turn off to keep it on screen with a "No live games" message. Needs "Mini scoreboard" turned on.']
+    ['hideEliminated', 'Autohide teams that are out', 'When one of your teams is out of the season or the playoffs (it lost its last playoff series, missed the playoffs, or ESPN marks it eliminated), take that team out of Scores, Recaps, Standings, Schedules and Injuries. If that was your only team in a sport, the sport goes too. Roster and Teams still list it, and alerts keep working.']
+  ];
+  const testing = [
+    ['showTestAlert', 'Show "Send test alert" button', 'Adds a Send test alert button to the bottom of the sidebar, for checking that Windows notifications work. Off by default.']
   ];
   const isOn = (k) => (DEFAULT_ON.includes(k) ? state.settings[k] !== false : !!state.settings[k]); // always the current settings: persist() replaces the object
   const row = ([k, title, desc]) => `
@@ -1224,10 +1231,18 @@ function renderSettings() {
       <button class="switch ${isOn(k) ? 'on' : ''}" data-set="${k}" role="switch" aria-checked="${isOn(k)}" aria-label="${title}"></button>
     </div>`;
   view.innerHTML = `<div class="setlist">
+    <h3 class="sethead">Updates</h3>
     ${updateRow()}
-    ${general.map(row).join('')}
+    ${updates.map(row).join('')}
+    <h3 class="sethead">Startup and tray</h3>
+    ${startup.map(row).join('')}
+    <h3 class="sethead">Mini scoreboard</h3>
+    ${mini.map(row).join('')}
     <h3 class="sethead">Autohide</h3>
     ${autohide.map(row).join('')}
+    <h3 class="sethead">Troubleshooting</h3>
+    ${testing.map(row).join('')}
+    <h3 class="sethead">Reset</h3>
     <div class="setrow danger">
       <div><b>Clear all app data</b><span>Removes your teams, alert choices, sidebar layout, startup settings and cached data, then closes SportsChud. The next time you open it, it's like a fresh install.</span></div>
       <div id="resetbox"><button class="dbtn" id="resetBtn">Clear data…</button></div>
@@ -1265,20 +1280,26 @@ function renderSettings() {
   });
 }
 
-/* ---------- Sidebar (reorderable + lockable) ---------- */
+/* ---------- Sidebar (grouped, reorderable within a group, lockable) ---------- */
 const NAV_ITEMS = {
   scores: ['◉', 'Scores'],
   recaps: ['▶', 'Recaps'],
+  activity: ['✦', 'Activity'],
   standings: ['≡', 'Standings'],
   playoffs: ['❖', 'Playoffs'],
-  roster: ['☰', 'Roster'],
-  injuries: ['✚', 'Injuries'],
+  leaderboards: ['♛', 'Leaders'], // (the key stays 'leaderboards' so it keeps working)
   pickups: ['⇄', 'Pickups'],
-  leaderboards: ['♛', 'Leaders'], // (the key stays 'leaderboards' so a saved sidebar order keeps working)
+  injuries: ['✚', 'Injuries'],
   schedule: ['▦', 'Schedules'],
-  teams: ['★', 'Teams'],
-  activity: ['✦', 'Activity']
+  roster: ['☰', 'Roster'],
+  teams: ['★', 'Select'] // (the key stays 'teams'; this is where you pick the teams you follow)
 };
+// Default sidebar: yellow group dividers, items in this order. Items only move up and down inside their group.
+const NAV_GROUPS = [
+  ['Games', ['scores', 'recaps', 'activity']],
+  ['Stats', ['standings', 'playoffs', 'leaderboards', 'pickups', 'injuries']],
+  ['Teams', ['schedule', 'roster', 'teams']]
+];
 
 // Playoffs only shows while a league is in its postseason, unless autohide is switched off
 // state.playoffLeagues = leagues in their postseason where a followed team is still alive
@@ -1293,16 +1314,18 @@ async function refreshPlayoffStatus() {
   if (state.tab === 'playoffs' && !playoffsVisible()) setTab('scores');
 }
 
-function navOrder() {
-  const known = Object.keys(NAV_ITEMS);
-  const saved = (state.settings.navOrder || []).filter((k) => known.includes(k));
-  return [...saved, ...known.filter((k) => !saved.includes(k))];
+// The saved order (setting navOrder2, written when you reorder) applies inside each group
+function navOrder(keys) {
+  const saved = (state.settings.navOrder2 || []).filter((k) => keys.includes(k));
+  return [...saved, ...keys.filter((k) => !saved.includes(k))];
 }
 
 function buildNav() {
-  const order = navOrder().filter(navVisible);
   const locked = state.settings.navLocked !== false;
-  $('#nav').innerHTML = order.map((k, i) => `
+  $('#nav').innerHTML = NAV_GROUPS.map(([name, keys]) => {
+    const order = navOrder(keys).filter(navVisible);
+    if (!order.length) return '';
+    return `<div class="navgroup">${esc(name)}</div>` + order.map((k, i) => `
     <div class="navrow">
       <button class="nav ${state.tab === k ? 'active' : ''}" data-view="${k}"><i>${NAV_ITEMS[k][0]}</i> ${NAV_ITEMS[k][1]}</button>
       ${locked ? '' : `<span class="mv">
@@ -1310,13 +1333,15 @@ function buildNav() {
         <button data-mv="${k}" data-d="1" ${i === order.length - 1 ? 'disabled' : ''} title="Move down">▼</button>
       </span>`}
     </div>`).join('');
+  }).join('');
   const lock = $('#navlock');
   lock.textContent = locked ? '🔒 Sidebar locked' : '🔓 Reorder, then lock';
   lock.classList.toggle('open', !locked);
   $('#nav').querySelectorAll('.nav').forEach((n) => (n.onclick = () => setTab(n.dataset.view)));
   $('#nav').querySelectorAll('[data-mv]').forEach((b) => {
     b.onclick = async () => {
-      const o = navOrder();
+      const group = NAV_GROUPS.find(([, keys]) => keys.includes(b.dataset.mv))[1];
+      const o = navOrder(group);
       const vis = o.filter(navVisible); // swap with the neighbour you can actually see
       const vi = vis.indexOf(b.dataset.mv);
       const vj = vi + +b.dataset.d;
@@ -1324,7 +1349,8 @@ function buildNav() {
       const i = o.indexOf(vis[vi]);
       const j = o.indexOf(vis[vj]);
       [o[i], o[j]] = [o[j], o[i]];
-      state.settings.navOrder = o;
+      const others = (state.settings.navOrder2 || []).filter((k) => !group.includes(k));
+      state.settings.navOrder2 = [...others, ...o];
       buildNav();
       await persist();
     };
