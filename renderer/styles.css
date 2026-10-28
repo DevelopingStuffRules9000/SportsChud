@@ -401,6 +401,7 @@ a[data-open]:hover { text-decoration: underline; }
 
 /* Win probability */
 .dwp { margin-bottom: 4px; }
+.dwp > h2 { margin-top: 28px; }
 .wpbar { display: flex; height: 14px; border-radius: 999px; overflow: hidden; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.05); }
 .wpa { background: var(--a); transition: width 0.4s; }
 .wph { background: var(--h); transition: width 0.4s; }
@@ -413,9 +414,10 @@ a[data-open]:hover { text-decoration: underline; }
 /* Game leaders */
 .dleads { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .dlead { border: 1px solid var(--line); border-radius: 16px; padding: 10px 14px; background: linear-gradient(160deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)); }
-.dlead header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.dlead { display: grid; grid-template-columns: max-content minmax(0, 1fr) auto; align-content: start; }
+.dlead header { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .dlead header img { width: 22px; height: 22px; object-fit: contain; }
-.dleadrow { display: grid; grid-template-columns: 42px 1fr auto; gap: 8px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.dleadrow { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; column-gap: 10px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; }
 .dlk { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; }
 .dln small { color: var(--muted); }
 .dlv { font-weight: 800; font-variant-numeric: tabular-nums; }
