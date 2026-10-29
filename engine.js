@@ -937,7 +937,14 @@ async function fetchLeaderboard(l, catName) {
 // One player: bio from the core athlete record plus the season's regular-season stats (grouped by category).
 // ESPN's stats payload is `splits.categories[].stats[]`; written from its usual layout, unverified against live data.
 const playerCache = new Map(); // `${league}:${id}` -> { at, data }
-function parsePlayer(a, stats, teams) {
+// Hockey players' stat groups read Offensive, then Defensive, then Penalties (ESPN's own order differs); the rest keep theirs
+const HOCKEY_ORDER = ['general', 'offensive', 'defensive', 'penalties'];
+const orderCats = (cats, kind) => {
+  if (kind !== 'hockey') return cats;
+  const rank = (c) => { const i = HOCKEY_ORDER.indexOf(c.name.toLowerCase()); return i < 0 ? HOCKEY_ORDER.length : i; };
+  return cats.map((c, i) => [c, i]).sort((x, y) => rank(x[0]) - rank(y[0]) || x[1] - y[1]).map(([c]) => c);
+};
+function parsePlayer(a, stats, teams, kind) {
   a = a && typeof a === 'object' ? a : {};
   const tid = idFromRef(a.team && a.team.$ref, 'teams');
   const t = teams.get(tid) || {};
@@ -959,7 +966,7 @@ function parsePlayer(a, stats, teams) {
     bio: [['Age', a.age], ['Height', a.displayHeight], ['Weight', a.displayWeight], ['Experience', a.experience && a.experience.years != null ? `${a.experience.years} yr` : ''], ['Born', bp]]
       .map(([k, v]) => [k, asTxt(v)]).filter(([, v]) => v),
     link: playerCard(a),
-    categories: cats
+    categories: orderCats(cats, kind)
   };
 }
 async function fetchPlayer(l, id, ttl = 600000) {
@@ -978,7 +985,7 @@ async function fetchPlayer(l, id, ttl = 600000) {
   for (const y of [year, year - 1]) {
     try { const s = await getJson(athleteStatsUrl(l, y, id)); if (objs(s && s.splits && s.splits.categories).length) { stats = s; season = y; break; } } catch (_) {}
   }
-  const data = { ...parsePlayer(aRes, stats, teams), id: String(id), season: stats ? season : null };
+  const data = { ...parsePlayer(aRes, stats, teams, l.kind), id: String(id), season: stats ? season : null };
   playerCache.set(ck, { at: Date.now(), data });
   if (playerCache.size > 60) playerCache.delete(playerCache.keys().next().value);
   return data;
