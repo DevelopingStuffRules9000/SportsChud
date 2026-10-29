@@ -57,6 +57,8 @@ const seasonYear = (l, d = new Date()) => {
 };
 const CORE = 'https://sports.core.api.espn.com/v2/sports';
 const leadersUrl = (l, year) => `${CORE}/${l.sport}/leagues/${l.league}/seasons/${year}/types/2/leaders`;
+const athleteUrl = (l, id) => `${CORE}/${l.sport}/leagues/${l.league}/athletes/${encodeURIComponent(id)}`;
+const athleteStatsUrl = (l, year, id) => `${CORE}/${l.sport}/leagues/${l.league}/seasons/${year}/types/2/athletes/${encodeURIComponent(id)}/statistics/0`;
 const teamsUrl = (l) => `${BASE}/${l.sport}/${l.league}/teams?limit=${l.teamsQuery ? 500 : 100}${l.teamsQuery || ''}`;
 
-module.exports = { LEAGUES, scoreboardUrl, standingsUrl, summaryUrl, rosterUrl, injuriesUrl, transactionsUrl, leadersUrl, seasonYear, CORE, teamsUrl, dayStr };
+module.exports = { LEAGUES, scoreboardUrl, standingsUrl, summaryUrl, rosterUrl, injuriesUrl, transactionsUrl, leadersUrl, athleteUrl, athleteStatsUrl, seasonYear, CORE, teamsUrl, dayStr };

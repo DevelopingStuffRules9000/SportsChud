@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('api', {
   injuries: (key) => ipcRenderer.invoke('injuries', key),
   gameDetail: (league, eventId) => ipcRenderer.invoke('game:detail', { league, eventId }),
   pickups: (key) => ipcRenderer.invoke('pickups', key),
+  player: (key, id) => ipcRenderer.invoke('player', { key, id }),
   leaders: (key, category) => ipcRenderer.invoke('leaders', { key, category }),
   getActivity: () => ipcRenderer.invoke('activity:get'),
   openLink: (url) => ipcRenderer.invoke('open:link', url),

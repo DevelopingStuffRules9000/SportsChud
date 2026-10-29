@@ -384,7 +384,7 @@ function detailBox(g, d) {
     html += `<h2>${esc(team.name)}</h2>`;
     for (const grp of p.groups) {
       html += `<table class="stbl dbox"><thead><tr><th class="tmh">${esc(grp.name)}</th>${grp.labels.map((l) => `<th>${esc(l)}</th>`).join('')}</tr></thead><tbody>
-        ${grp.rows.map((r) => `<tr><td class="lt">${esc(r.name)}${r.jersey ? ` <small>#${esc(r.jersey)}</small>` : ''}</td>${grp.labels.map((_, i) => `<td>${esc(r.stats[i] != null ? r.stats[i] : '')}</td>`).join('')}</tr>`).join('')}
+        ${grp.rows.map((r) => `<tr><td class="lt">${playerName(g.league, r.id, r.name, '')}${r.jersey ? ` <small>#${esc(r.jersey)}</small>` : ''}</td>${grp.labels.map((_, i) => `<td>${esc(r.stats[i] != null ? r.stats[i] : '')}</td>`).join('')}</tr>`).join('')}
         ${grp.totals.length ? `<tr class="dtotal"><td class="lt">Totals</td>${grp.labels.map((_, i) => `<td>${esc(grp.totals[i] != null ? grp.totals[i] : '')}</td>`).join('')}</tr>` : ''}
       </tbody></table>`;
     }
@@ -428,13 +428,61 @@ function paintDetail() {
   view.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => api.openLink(b.dataset.open)));
 }
 
+/* ---------- Player panel (click a player's name) ---------- */
+// A player's name is a link that opens ESPN's season stats for them in a panel over the current view.
+const playerName = (key, id, name, link) => (id
+  ? `<a href="#" class="plink" data-player="${esc(key)}:${esc(id)}">${esc(name)}</a>`
+  : link ? `<a href="#" data-open="${esc(link)}">${esc(name)}</a>` : `<span>${esc(name)}</span>`);
+const playerPanel = { token: 0 };
+function closePlayer() { const m = $('#pmodal'); if (m) m.remove(); playerPanel.token++; }
+async function openPlayer(key, id) {
+  closePlayer();
+  const token = ++playerPanel.token;
+  const m = document.createElement('div');
+  m.id = 'pmodal'; m.className = 'pmodal';
+  m.innerHTML = '<div class="pcard" role="dialog" aria-modal="true" aria-label="Player stats"><button class="pclose" aria-label="Close">✕</button><div class="pbody"><p class="dnone">Loading player…</p></div></div>';
+  document.body.appendChild(m);
+  m.onclick = (e) => { if (e.target === m || e.target.closest('.pclose')) closePlayer(); };
+  let d;
+  try { d = await api.player(key, id); } catch (e) { d = { ok: false, error: e.message }; }
+  if (token !== playerPanel.token) return; // closed or another player opened meanwhile
+  const body = m.querySelector('.pbody');
+  if (!d || !d.ok) {
+    body.innerHTML = `<h3>Couldn't load this player</h3><p class="dnone">${esc((d && d.error) || 'Check your connection and try again.')}</p><button class="cta" id="pRetry">Try again</button>`;
+    $('#pRetry').onclick = () => openPlayer(key, id);
+    return;
+  }
+  body.innerHTML = `<div class="phead">${d.headshot ? `<img class="phs" src="${esc(d.headshot)}" alt="" />` : ''}<div>
+      <h2 class="pname">${esc(d.name)}</h2>
+      <div class="pmeta">${[d.jersey ? '#' + esc(d.jersey) : '', esc(d.pos)].filter(Boolean).join(' · ')}</div>
+      ${d.team ? `<div class="pteam">${d.teamLogo ? `<img src="${esc(d.teamLogo)}" alt="" />` : ''}<span>${esc(d.team)}</span></div>` : ''}
+    </div></div>
+    ${d.bio.length ? `<div class="pbio">${d.bio.map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div>` : ''}
+    ${d.categories.length ? d.categories.map((c) => `<h2>${esc(c.name)}${d.season ? ` <span class="cnt">${esc(d.season)} season</span>` : ''}</h2>
+      <div class="pstats">${c.stats.map((s) => `<div title="${esc(s.full)}"><span>${esc(s.label)}</span><b>${esc(s.value)}</b></div>`).join('')}</div>`).join('') : '<p class="dnone">ESPN has no season stats for this player yet.</p>'}
+    ${d.link ? `<div class="pfoot"><button class="ghost" data-open="${esc(d.link)}">Open on ESPN</button></div>` : ''}`;
+  body.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => api.openLink(b.dataset.open)));
+}
+// One listener covers every list that shows player names
+document.addEventListener('click', (e) => {
+  const a = e.target.closest && e.target.closest('[data-player]');
+  if (!a) return;
+  e.preventDefault();
+  const [key, id] = a.dataset.player.split(':');
+  openPlayer(key, id);
+});
+
 // Broken logos and headshots are hidden. (An inline onerror="" attribute would be blocked by the page's CSP.)
 // "error" doesn't bubble, so listen in the capture phase.
 document.addEventListener('error', (e) => {
   const el = e.target;
   if (el && el.tagName === 'IMG') el.style[el.classList.contains('cimg') ? 'display' : 'visibility'] = el.classList.contains('cimg') ? 'none' : 'hidden';
 }, true);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.detail && state.tab === state.detail.from) closeDetail(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if ($('#pmodal')) closePlayer();
+  else if (state.detail && state.tab === state.detail.from) closeDetail();
+});
 
 /* ---------- Schedules view (day agenda / week / month) ---------- */
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -445,6 +493,13 @@ const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); r
 const timeOf = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
 state.cal = { view: 'week', date: startOfDay(new Date()).getTime() };
+const CAL_VIEWS = ['day', 'week', 'month'];
+// Schedules reopens in the view (Day / Week / Month) you last used, also after restarting the app
+function rememberCalView() {
+  if (state.settings.calView === state.cal.view) return;
+  state.settings.calView = state.cal.view;
+  persist();
+}
 
 // Everything the UI needs to describe a game from the followed team's point of view
 function perspective(g, fol) {
@@ -526,7 +581,7 @@ async function renderSchedule() {
   if (!n) return showAllHidden('Schedules');
 
   const cal = state.cal;
-  setActions([['day', 'Day'], ['week', 'Week'], ['month', 'Month']], cal.view, (k) => { cal.view = k; renderSchedule(); });
+  setActions([['day', 'Day'], ['week', 'Week'], ['month', 'Month']], cal.view, (k) => { cal.view = k; rememberCalView(); renderSchedule(); });
   const controls = `<div class="calbar">
       <button class="cbtn" id="prevM" title="Previous">‹</button>
       <div class="calname">${esc(calTitle())}</div>
@@ -545,7 +600,7 @@ async function renderSchedule() {
     $('#prevM').onclick = () => step(-1);
     $('#nextM').onclick = () => step(1);
     $('#todayM').onclick = () => { cal.date = startOfDay(new Date()).getTime(); renderSchedule(); };
-    view.querySelectorAll('[data-goday]').forEach((el) => (el.onclick = () => { cal.date = +el.dataset.goday; cal.view = 'day'; renderSchedule(); }));
+    view.querySelectorAll('[data-goday]').forEach((el) => (el.onclick = () => { cal.date = +el.dataset.goday; cal.view = 'day'; rememberCalView(); renderSchedule(); }));
   };
 
   view.innerHTML = controls + `<div class="empty"><p>Loading schedule…</p></div>`;
@@ -923,7 +978,7 @@ async function renderRoster() {
         <tbody>${g.players.map((p) => `
           <tr data-n="${esc(p.name.toLowerCase())}">
             <td class="rk">${cell(p.jersey)}</td>
-            <td class="tmc"><div class="tm"><img class="hs" src="${esc(p.headshot)}" alt="" />${p.link ? `<a href="#" data-open="${esc(p.link)}">${esc(p.name)}</a>` : `<span>${esc(p.name)}</span>`}</div></td>
+            <td class="tmc"><div class="tm"><img class="hs" src="${esc(p.headshot)}" alt="" />${playerName(f.league, p.id, p.name, p.link)}</div></td>
             <td>${cell(p.pos)}</td><td>${cell(p.age)}</td><td>${cell(p.height)}</td><td>${cell(p.weight)}</td><td>${cell(p.exp)}</td>
             <td>${p.injury ? `<span class="st ${statusClass(p.injury)}">${esc(p.injury)}</span>` : ''}</td>
           </tr>`).join('')}
@@ -996,7 +1051,7 @@ async function renderPickups() {
   state.pickLeagueKey = validLeague(state.pickLeagueKey, leagues);
   const key = state.pickLeagueKey;
   const lg = leagueOf(key);
-  setActions([['mine', 'My teams'], ['all', 'Whole league']], state.pickScope, (k) => { state.pickScope = k; renderPickups(); }, {
+  setActions([['mine', 'My team'], ['all', 'Whole league']], state.pickScope, (k) => { state.pickScope = k; renderPickups(); }, {
     items: leagues.map((x) => [x.key, `${x.icon} ${esc(x.name)}`]),
     current: key,
     onPick: (k) => { state.pickLeagueKey = k; renderPickups(); }
@@ -1075,7 +1130,7 @@ async function renderLeaderboards() {
   const rows = data.category.rows;
   view.innerHTML = `<table class="stbl lbtbl"><thead><tr><th class="rk">#</th><th class="tmh">Player</th><th class="tmh">Team</th><th>${esc(data.category.label)}</th></tr></thead><tbody>${rows.map((r) => `
     <tr class="${mine(r) ? 'mine' : ''}"><td class="rk">${r.rank}</td>
-      <td class="lt"><div class="tm"><img class="hs" src="${esc(r.headshot)}" alt="" />${r.link ? `<a href="#" data-open="${esc(r.link)}">${esc(r.name)}</a>` : `<span>${esc(r.name)}</span>`}${r.pos ? ` <small>${esc(r.pos)}</small>` : ''}</div></td>
+      <td class="lt"><div class="tm"><img class="hs" src="${esc(r.headshot)}" alt="" />${playerName(key, r.id, r.name, r.link)}${r.pos ? ` <small>${esc(r.pos)}</small>` : ''}</div></td>
       <td class="lt"><div class="tm"><img src="${esc(r.teamLogo)}" alt="" /><span>${esc(r.team)}</span></div></td>
       <td class="tot">${esc(r.value)}</td></tr>`).join('')}</tbody></table>
     <p class="dnone">Highlighted rows are players on teams you follow. ${esc(data.categories.length)} categories: pick one above.</p>`;
@@ -1144,7 +1199,7 @@ async function renderInjuries() {
     return `<div class="injrow">
       <img class="hs" src="${esc(p.headshot)}" alt="" />
       <div class="ib">
-        <b>${p.link ? `<a href="#" data-open="${esc(p.link)}">${esc(p.name)}</a>` : esc(p.name)} ${p.pos ? `<em>${esc(p.pos)}</em>` : ''}</b>
+        <b>${playerName(p.league || key, p.playerId, p.name, p.link)} ${p.pos ? `<em>${esc(p.pos)}</em>` : ''}</b>
         <span>${esc(detail)}</span>
       </div>
       <div class="ir"><span class="st ${statusClass(p.status)}">${esc(p.status)}</span>
@@ -1498,6 +1553,7 @@ function applyTestButton() { $('#test').hidden = !settingOn('showTestAlert'); }
     persist();
   }
 
+  if (CAL_VIEWS.includes(state.settings.calView)) state.cal.view = state.settings.calView;
   applyTestButton();
   try { state.version = await api.version(); } catch (_) {}
   try { state.update = await api.updateState(); } catch (_) {}

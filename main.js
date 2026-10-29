@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, Notification, shell, Tray, Menu, nativeImag
 const path = require('path');
 const fs = require('fs');
 const { LEAGUES, teamsUrl, dayStr } = require('./leagues');
-const { Engine, parseEvent, fetchDays, fetchStandings, isPostseason, fetchPlayoffs, followedAlive, fetchOutTeams, isInSeason, fetchRoster, fetchInjuries, fetchGameDetail, fetchTransactions, fetchLeaderboard } = require('./engine');
+const { Engine, parseEvent, fetchDays, fetchStandings, isPostseason, fetchPlayoffs, followedAlive, fetchOutTeams, isInSeason, fetchRoster, fetchInjuries, fetchGameDetail, fetchTransactions, fetchLeaderboard, fetchPlayer } = require('./engine');
 
 const { Updater } = require('./updater');
 
@@ -580,6 +580,14 @@ app.whenReady().then(() => {
     if (!l) return { ok: false, error: 'Unknown league', categories: [] };
     try { return { ok: true, ...(await fetchLeaderboard(l, typeof category === 'string' ? category.slice(0, 60) : '')) }; }
     catch (err) { return { ok: false, error: err.message, categories: [] }; }
+  });
+  ipcMain.handle('player', async (_, arg) => {
+    const { key, id } = arg && typeof arg === 'object' ? arg : {};
+    const l = LEAGUES.find((x) => x.key === key);
+    const pid = typeof id === 'number' ? String(id) : id;
+    if (!l || typeof pid !== 'string' || !/^\d{1,12}$/.test(pid)) return { ok: false, error: 'Unknown player' };
+    try { return { ok: true, ...(await fetchPlayer(l, pid)) }; }
+    catch (err) { return { ok: false, error: err.message }; }
   });
   ipcMain.handle('activity:get', () => activity);
   ipcMain.handle('notify:test', () =>

@@ -442,3 +442,26 @@ a[data-open]:hover { text-decoration: underline; }
 .lbtbl .tot { font-weight: 800; }
 .lbtbl .hs { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
 .lbtbl small { color: var(--muted); margin-left: 6px; }
+
+/* player panel */
+.pmodal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 32px; background: rgba(0, 0, 0, 0.6); }
+.pcard { position: relative; width: min(760px, 100%); max-height: 100%; overflow-y: auto; border: 1px solid var(--line); border-radius: 20px; padding: 24px 28px 22px; background: #232323; box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.8); }
+.pclose { position: absolute; top: 14px; right: 14px; width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.06); color: var(--text); cursor: pointer; }
+.pclose:hover { background: rgba(255, 255, 255, 0.16); }
+.phead { display: flex; align-items: center; gap: 18px; padding-right: 36px; }
+.phs { width: 88px; height: 88px; border-radius: 50%; object-fit: cover; background: rgba(255, 255, 255, 0.06); flex: none; }
+.pname { margin: 0 !important; font-size: 24px; letter-spacing: 0; text-transform: none; color: var(--text); font-weight: 800; }
+.pname::after { display: none; }
+.pmeta { color: var(--muted); font-weight: 600; margin-top: 4px; }
+.pteam { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-weight: 700; }
+.pteam img { width: 22px; height: 22px; object-fit: contain; }
+.pbio { display: flex; flex-wrap: wrap; gap: 10px 28px; margin: 18px 0 4px; padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.pbio span { display: block; font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+.pbio b { font-size: 15px; }
+.pstats { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+.pstats > div { border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; background: rgba(255, 255, 255, 0.04); }
+.pstats span { display: block; font-size: 11px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: var(--muted); }
+.pstats b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.pfoot { margin-top: 20px; display: flex; justify-content: flex-end; }
+.plink { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }
+.plink:hover { color: var(--amber); border-bottom-color: var(--amber); }

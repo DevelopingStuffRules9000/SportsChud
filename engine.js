@@ -1,4 +1,4 @@
-const { LEAGUES, scoreboardUrl, standingsUrl, summaryUrl, rosterUrl, injuriesUrl, transactionsUrl, leadersUrl, seasonYear, teamsUrl, dayStr } = require('./leagues');
+const { LEAGUES, scoreboardUrl, standingsUrl, summaryUrl, rosterUrl, injuriesUrl, transactionsUrl, leadersUrl, athleteUrl, athleteStatsUrl, seasonYear, teamsUrl, dayStr } = require('./leagues');
 
 const dayCache = new Map(); // `${league}:${YYYYMMDD}` -> { at, events }
 
@@ -564,6 +564,7 @@ function parseInjuries(l, data) {
       const d = i.details || {};
       return {
         id: String(i.id),
+        playerId: a.id != null ? String(a.id) : '',
         name: a.displayName || [a.firstName, a.lastName].filter(Boolean).join(' '),
         pos: (a.position && a.position.abbreviation) || '',
         headshot: (a.headshot && a.headshot.href) || '',
@@ -710,6 +711,7 @@ function parseGameDetail(l, data) {
         name: name.charAt(0).toUpperCase() + name.slice(1),
         labels: asArr(g.labels).map(asTxt),
         rows: objs(g.athletes).slice(0, DETAIL_ROWS).map((a) => ({
+          id: asTxt(a.athlete && a.athlete.id),
           name: asTxt(a.athlete && (a.athlete.shortName || a.athlete.displayName)),
           jersey: asTxt(a.athlete && a.athlete.jersey),
           stats: asArr(a.stats).map(asTxt)
@@ -924,12 +926,62 @@ async function fetchLeaderboard(l, catName) {
     const a = athletes[i] || {};
     const t = teams.get(e.teamId || a.teamId || '') || {};
     return {
-      rank: i + 1, name: a.name || `Player ${e.id}`, pos: a.pos || '', headshot: a.headshot || '', link: a.link || '',
+      rank: i + 1, id: e.id, name: a.name || `Player ${e.id}`, pos: a.pos || '', headshot: a.headshot || '', link: a.link || '',
       teamId: e.teamId || a.teamId || '', team: t.abbr || '', teamLogo: t.logo || (t.abbr ? `https://a.espncdn.com/i/teamlogos/${l.league}/500/${t.abbr.toLowerCase()}.png` : ''),
       value: e.value
     };
   });
   return { season, categories: categories.map((c) => ({ name: c.name, label: c.label, abbr: c.abbr })), category: { name: cat.name, label: cat.label, rows } };
+}
+
+// One player: bio from the core athlete record plus the season's regular-season stats (grouped by category).
+// ESPN's stats payload is `splits.categories[].stats[]`; written from its usual layout, unverified against live data.
+const playerCache = new Map(); // `${league}:${id}` -> { at, data }
+function parsePlayer(a, stats, teams) {
+  a = a && typeof a === 'object' ? a : {};
+  const tid = idFromRef(a.team && a.team.$ref, 'teams');
+  const t = teams.get(tid) || {};
+  const bp = a.birthPlace && typeof a.birthPlace === 'object' ? [a.birthPlace.city, a.birthPlace.state, a.birthPlace.country].map(asTxt).filter(Boolean).join(', ') : '';
+  const cats = objs(stats && stats.splits && stats.splits.categories).map((c) => ({
+    name: asTxt(c.displayName || c.name),
+    stats: objs(c.stats).map((s) => ({
+      label: asTxt(s.shortDisplayName || s.abbreviation || s.displayName || s.name),
+      full: asTxt(s.displayName || s.name),
+      value: asTxt(s.displayValue != null ? s.displayValue : s.value)
+    })).filter((s) => s.label && s.value)
+  })).filter((c) => c.stats.length);
+  return {
+    name: asTxt(a.displayName || a.fullName),
+    jersey: asTxt(a.jersey),
+    pos: asTxt(a.position && (a.position.displayName || a.position.abbreviation)),
+    team: t.name || '', teamAbbr: t.abbr || '', teamLogo: t.logo || '',
+    headshot: asTxt(a.headshot && a.headshot.href),
+    bio: [['Age', a.age], ['Height', a.displayHeight], ['Weight', a.displayWeight], ['Experience', a.experience && a.experience.years != null ? `${a.experience.years} yr` : ''], ['Born', bp]]
+      .map(([k, v]) => [k, asTxt(v)]).filter(([, v]) => v),
+    link: playerCard(a),
+    categories: cats
+  };
+}
+async function fetchPlayer(l, id, ttl = 600000) {
+  const ck = `${l.key}:${id}`;
+  const hit = playerCache.get(ck);
+  if (hit && Date.now() - hit.at < ttl) return hit.data;
+  const getJson = async (url) => {
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  };
+  const year = seasonYear(l);
+  const [aRes, teams] = await Promise.all([getJson(athleteUrl(l, id)), leagueTeamIndex(l)]);
+  // This season's stats; before the season starts (or for a rookie) fall back to last season's
+  let stats = null, season = year;
+  for (const y of [year, year - 1]) {
+    try { const s = await getJson(athleteStatsUrl(l, y, id)); if (objs(s && s.splits && s.splits.categories).length) { stats = s; season = y; break; } } catch (_) {}
+  }
+  const data = { ...parsePlayer(aRes, stats, teams), id: String(id), season: stats ? season : null };
+  playerCache.set(ck, { at: Date.now(), data });
+  if (playerCache.size > 60) playerCache.delete(playerCache.keys().next().value);
+  return data;
 }
 
 const detailCache = new Map(); // `${league}:${eventId}` -> { at, data }
@@ -1236,4 +1288,4 @@ class Engine {
   }
 }
 
-module.exports = { parseTransactions, txKind, fetchTransactions, parseLeaders, fetchLeaderboard, Engine, parseEvent, periodInfo, fetchDays, fetchStandings, standingsSnapshot, standingsChanges, parseScoringPlays, playsBetween, cleanPlayText, parseGameDetail, parseWinProb, parseGameLeaders, fetchGameDetail, isPostseason, fetchPlayoffs, followedAlive, playoffsOutcome, fetchOutTeams, isInSeason, fetchRoster, fetchInjuries, parseRoster, parseInjuries };
+module.exports = { parsePlayer, fetchPlayer, parseTransactions, txKind, fetchTransactions, parseLeaders, fetchLeaderboard, Engine, parseEvent, periodInfo, fetchDays, fetchStandings, standingsSnapshot, standingsChanges, parseScoringPlays, playsBetween, cleanPlayText, parseGameDetail, parseWinProb, parseGameLeaders, fetchGameDetail, isPostseason, fetchPlayoffs, followedAlive, playoffsOutcome, fetchOutTeams, isInSeason, fetchRoster, fetchInjuries, parseRoster, parseInjuries };
