@@ -13,7 +13,7 @@ let tray = null;
 let quitting = false;
 let resetting = false;
 const startHidden = process.argv.includes('--hidden');
-let settings = { follows: [], reminderMinutes: 15, launchAtStartup: false, startSilently: false, keepInTray: true, playoffsAutoHide: true, hideOffSeason: true, hideEliminated: true, offSeasonDefaultApplied: true, showTestAlert: false, activityAutoHide: true, checkForUpdates: true, groupBy: 'team', navOrder: null, navLocked: true, overlayEnabled: false, overlayAutoHide: false, overlayBounds: null };
+let settings = { follows: [], reminderMinutes: 15, launchAtStartup: false, startSilently: false, keepInTray: true, playoffsAutoHide: true, hideOffSeason: true, hideEliminated: true, seasonalThemes: true, offSeasonDefaultApplied: true, showTestAlert: false, activityAutoHide: true, checkForUpdates: true, groupBy: 'team', navOrder: null, navLocked: true, overlayEnabled: false, overlayAutoHide: false, overlayBounds: null };
 const activity = [];
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 
@@ -483,7 +483,7 @@ app.whenReady().then(() => {
   ipcMain.handle('app:reset', async () => {
     resetting = true;
     engine.stop();
-    settings = { follows: [], reminderMinutes: 15, launchAtStartup: false, startSilently: false, keepInTray: true, playoffsAutoHide: true, hideOffSeason: true, hideEliminated: true, offSeasonDefaultApplied: true, showTestAlert: false, activityAutoHide: true, checkForUpdates: true, groupBy: 'team', navOrder: null, navLocked: true, overlayEnabled: false, overlayAutoHide: false, overlayBounds: null };
+    settings = { follows: [], reminderMinutes: 15, launchAtStartup: false, startSilently: false, keepInTray: true, playoffsAutoHide: true, hideOffSeason: true, hideEliminated: true, seasonalThemes: true, offSeasonDefaultApplied: true, showTestAlert: false, activityAutoHide: true, checkForUpdates: true, groupBy: 'team', navOrder: null, navLocked: true, overlayEnabled: false, overlayAutoHide: false, overlayBounds: null };
     closeOverlay();
     applyStartup(); // removes the start-at-login entry
     try { await session.defaultSession.clearStorageData(); await session.defaultSession.clearCache(); } catch (_) {}

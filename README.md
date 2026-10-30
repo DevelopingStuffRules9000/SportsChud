@@ -37,6 +37,7 @@ The installed app checks GitHub for a newer release 20 seconds after it starts a
 - **Injuries** shows the league injury report with status (Out, Day-To-Day, IR), injury type, expected return date and ESPN's note. Switch between **My teams** and **Whole league**; your teams are listed first and tagged.
 - **Scores** shows live and today's games with the current period, inning or quarter. **Schedules** is a monthly calendar of games for every team you follow. **Teams** is where you pick teams and set alerts. **Activity** logs every alert sent (by default the tab only appears once the first alert has gone out; turn off **Autohide Activity** in Settings to always show it).
 - The sidebar is split into **Games** (Scores, Recaps, Activity), **Stats** (Standings, Playoffs, Leaders, Pickups, Injuries) and **Teams** (Schedules, Roster, Select) with yellow dividers; the lock button at the bottom lets you reorder items within their group.
+- **Seasonal themes** (Settings > Appearance, on by default) tint the app for Halloween (Oct 24 to Nov 7) and Christmas (Dec 18 to Jan 1). Turn them off to keep the normal look.
 - Click a player's name in **Roster**, **Injuries**, **Leaders** or a game's box score to see their bio and season stats from ESPN in a panel.
 - **Schedules** reopens in the Day, Week or Month view you used last.
 - Pick teams on the **Select** tab. Each team has its own toggles: reminder, game start, periods/innings/quarters, scoring, close game, overtime, final.

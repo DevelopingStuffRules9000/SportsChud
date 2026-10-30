@@ -1217,7 +1217,7 @@ async function renderInjuries() {
 
 /* ---------- Settings view ---------- */
 // Settings that are on unless explicitly saved as false (keep in sync with the defaults in main.js)
-const DEFAULT_ON = ['keepInTray', 'playoffsAutoHide', 'activityAutoHide', 'checkForUpdates', 'hideOffSeason', 'hideEliminated'];
+const DEFAULT_ON = ['seasonalThemes', 'keepInTray', 'playoffsAutoHide', 'activityAutoHide', 'checkForUpdates', 'hideOffSeason', 'hideEliminated'];
 
 // Update banner (under the header) and the Updates row in Settings. state.update comes from main (updater.js).
 function renderUpdBar() {
@@ -1267,6 +1267,9 @@ function renderSettings() {
     ['startSilently', 'Start silently', 'On startup, run in the background with no window. Open it from the tray icon. Needs "Keep running in tray".'],
     ['keepInTray', 'Keep running in tray', 'Closing the window hides it to the tray so alerts keep coming. Quit from the tray icon.']
   ];
+  const appearance = [
+    ['seasonalThemes', 'Seasonal themes', 'Halloween and Christmas colors for the week before and after each holiday (Oct 24 to Nov 7, Dec 18 to Jan 1). Turn off to keep the normal look all year.']
+  ];
   const mini = [
     ['overlayEnabled', 'Mini scoreboard', 'A small always-on-top window with the score and clock of your live games. Drag it anywhere; it remembers where you left it. Also in the tray menu.'],
     ['overlayAutoHide', 'Autohide Mini scoreboard', 'Only show the mini scoreboard while one of your teams is playing a live game. Turn off to keep it on screen with a "No live games" message. Needs "Mini scoreboard" turned on.']
@@ -1292,6 +1295,8 @@ function renderSettings() {
     ${updates.map(row).join('')}
     <h3 class="sethead">Startup and tray</h3>
     ${startup.map(row).join('')}
+    <h3 class="sethead">Appearance</h3>
+    ${appearance.map(row).join('')}
     <h3 class="sethead">Mini scoreboard</h3>
     ${mini.map(row).join('')}
     <h3 class="sethead">Autohide</h3>
@@ -1331,9 +1336,26 @@ function renderSettings() {
       if (k === 'hideOffSeason' && st[k]) await refreshSeasonStatus();
       if (k === 'hideEliminated' && st[k]) await refreshOutStatus();
       if (k === 'showTestAlert') applyTestButton();
+      if (k === 'seasonalThemes') applySeason();
       renderSettings();
     };
   });
+}
+
+/* ---------- Seasonal themes ---------- */
+// Halloween and Christmas colour the app for the week before and after the day itself (Oct 24 to Nov 7, Dec 18 to Jan 1).
+// The "Seasonal themes" setting (on by default) switches them off.
+function seasonOf(d = new Date()) {
+  const near = (m, day, y) => Math.abs(startOfDay(d) - new Date(y, m, day)) <= 7 * 86400000;
+  const y = d.getFullYear();
+  if (near(9, 31, y)) return 'halloween';
+  if (near(11, 25, y) || near(11, 25, y - 1)) return 'christmas';
+  return '';
+}
+function applySeason() {
+  const s = settingOn('seasonalThemes') ? seasonOf() : '';
+  if (s) document.documentElement.dataset.season = s;
+  else delete document.documentElement.dataset.season;
 }
 
 /* ---------- Sidebar (grouped, reorderable within a group, lockable) ---------- */
@@ -1554,6 +1576,8 @@ function applyTestButton() { $('#test').hidden = !settingOn('showTestAlert'); }
   }
 
   if (CAL_VIEWS.includes(state.settings.calView)) state.cal.view = state.settings.calView;
+  applySeason();
+  setInterval(applySeason, 3600000); // the theme starts and ends at midnight even if the app stays open
   applyTestButton();
   try { state.version = await api.version(); } catch (_) {}
   try { state.update = await api.updateState(); } catch (_) {}

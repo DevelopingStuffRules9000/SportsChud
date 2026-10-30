@@ -465,3 +465,13 @@ a[data-open]:hover { text-decoration: underline; }
 .pfoot { margin-top: 20px; display: flex; justify-content: flex-end; }
 .plink { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }
 .plink:hover { color: var(--amber); border-bottom-color: var(--amber); }
+
+/* seasonal themes (set on <html data-season> by applySeason in renderer.js) */
+:root[data-season="halloween"] { --orange: #ff6a00; --amber: #ff9a2e; --purple: #9b5cff; }
+:root[data-season="halloween"] .aurora { background: radial-gradient(900px 500px at 8% -10%, rgba(155, 92, 255, 0.22), transparent 70%), radial-gradient(800px 500px at 100% 110%, rgba(255, 106, 0, 0.18), transparent 70%), var(--bg); }
+:root[data-season="halloween"] .nav.active { background: linear-gradient(135deg, rgba(255, 106, 0, 0.32), rgba(155, 92, 255, 0.22)); border-color: rgba(255, 154, 46, 0.55); box-shadow: 0 8px 24px -10px rgba(255, 106, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.2); }
+:root[data-season="halloween"] .brand::after { content: '🎃'; margin-left: auto; font-size: 22px; }
+:root[data-season="christmas"] { --orange: #e8434b; --amber: #7be495; }
+:root[data-season="christmas"] .aurora { background: radial-gradient(900px 500px at 8% -10%, rgba(232, 67, 75, 0.2), transparent 70%), radial-gradient(800px 500px at 100% 110%, rgba(60, 190, 110, 0.18), transparent 70%), var(--bg); }
+:root[data-season="christmas"] .nav.active { background: linear-gradient(135deg, rgba(232, 67, 75, 0.32), rgba(60, 190, 110, 0.2)); border-color: rgba(123, 228, 149, 0.5); box-shadow: 0 8px 24px -10px rgba(232, 67, 75, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.2); }
+:root[data-season="christmas"] .brand::after { content: '🎄'; margin-left: auto; font-size: 22px; }
