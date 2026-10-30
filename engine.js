@@ -501,13 +501,20 @@ const playerCard = (a) => {
   const l = (a.links || []).find((x) => (x.rel || []).includes('playercard')) || (a.links || [])[0];
   return l && /^https:\/\//.test(l.href || '') ? l.href : '';
 };
+// An athlete's id: ESPN's injury feed often leaves `id` off, so fall back to its $ref or the player-card link (.../id/3114/...)
+const athleteId = (a) => {
+  a = a && typeof a === 'object' ? a : {};
+  if (a.id != null && /^\d+$/.test(String(a.id))) return String(a.id);
+  const m = /\/athletes\/(\d+)/.exec(String(a.$ref || '')) || /\/id\/(\d+)/.exec(playerCard(a)) || /\/(?:player|athletes)\/(?:[^\s?#]*\/)?(\d+)/.exec(playerCard(a));
+  return m ? m[1] : '';
+};
 const prettyGroup = (s) =>
   String(s || 'Roster').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase());
 
 function parseRoster(data) {
   const raw = Array.isArray(data.athletes) ? data.athletes.filter(Boolean) : [];
   const mapAthlete = (a) => ({
-    id: String(a.id),
+    id: athleteId(a) || String(a.id),
     name: a.displayName || a.fullName || '',
     jersey: a.jersey != null ? String(a.jersey) : '',
     pos: (a.position && a.position.abbreviation) || '',
@@ -564,7 +571,7 @@ function parseInjuries(l, data) {
       const d = i.details || {};
       return {
         id: String(i.id),
-        playerId: a.id != null ? String(a.id) : '',
+        playerId: athleteId(a),
         name: a.displayName || [a.firstName, a.lastName].filter(Boolean).join(' '),
         pos: (a.position && a.position.abbreviation) || '',
         headshot: (a.headshot && a.headshot.href) || '',
